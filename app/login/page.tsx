@@ -10,11 +10,24 @@ export default function LoginPage() {
   const [message, setMessage] = useState('')
 
   const handleAuth = async () => {
-    const { error } = isLogin
+     console.log('🔁 handleAuth triggered') // Debug log
+
+  try {
+    const { error, data } = isLogin
       ? await supabase.auth.signInWithPassword({ email, password })
       : await supabase.auth.signUp({ email, password })
 
-    setMessage(error ? error.message : 'Success!')
+    if (error) {
+      console.error('❌ Supabase error:', error)
+      setMessage(`Error: ${error.message}`)
+    } else {
+      console.log('✅ Auth response:', data)
+      setMessage('Success! Check your email to verify (if signing up).')
+    }
+  } catch (err) {
+    console.error('⚠️ Caught unexpected error:', err)
+    setMessage(`Unexpected error: ${err}`)
+  }
   }
 
   return (
