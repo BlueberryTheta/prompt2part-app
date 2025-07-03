@@ -28,6 +28,9 @@ export default function LoginPage() {
     console.error('⚠️ Caught unexpected error:', err)
     setMessage(`Unexpected error: ${err}`)
   }
+  console.log("SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL)
+  console.log("SUPABASE_KEY", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+
   }
 
   return (
