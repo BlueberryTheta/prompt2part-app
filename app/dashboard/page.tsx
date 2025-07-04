@@ -43,7 +43,7 @@ export default function DashboardPage() {
 
       <div className="space-y-2">
         {history.map((msg, i) => (
-          <div key={i} className={`p-2 ${msg.role === 'user' ? 'bg-blue-100' : 'bg-gray-100'} rounded`}>
+          <div key={i} className={`p-2 ${msg.role === 'user' ? 'bg-black-100' : 'bg-black-100'} rounded`}>
             <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> {msg.content}
           </div>
         ))}
@@ -60,7 +60,7 @@ export default function DashboardPage() {
       <button
         onClick={handleSubmit}
         disabled={loading}
-        className="bg-blue-600 text-white px-4 py-2 rounded"
+        className="bg-white-600 text-white px-4 py-2 rounded"
       >
         {loading ? 'Generating...' : 'Send'}
       </button>
