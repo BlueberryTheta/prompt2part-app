@@ -10,27 +10,41 @@ export default function LoginPage() {
   const [message, setMessage] = useState('')
 
   const handleAuth = async () => {
-     console.log('🔁 handleAuth triggered') // Debug log
+    setMessage('')
+    console.log('🔁 handleAuth triggered')
 
-  try {
-    const { error, data } = isLogin
-      ? await supabase.auth.signInWithPassword({ email, password })
-      : await supabase.auth.signUp({ email, password })
+    try {
+      if (isLogin) {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+        if (error) {
+          console.error('❌ Login error:', error)
+          setMessage(`Error: ${error.message}`)
+        } else {
+          console.log('✅ Logged in:', data)
+          setMessage('Successfully logged in!')
+          window.location.href = '/dashboard' // Optional: redirect on login
+        }
+      } else {
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: 'https://prompt2part.vercel.app/auth/callback',
+          },
+        })
 
-    if (error) {
-      console.error('❌ Supabase error:', error)
-      setMessage(`Error: ${error.message}`)
-    } else {
-      console.log('✅ Auth response:', data)
-      setMessage('Success! Check your email to verify (if signing up).')
+        if (error) {
+          console.error('❌ Sign up error:', error)
+          setMessage(`Error: ${error.message}`)
+        } else {
+          console.log('✅ Sign up initiated:', data)
+          setMessage('Success! Please check your email to verify your account.')
+        }
+      }
+    } catch (err: any) {
+      console.error('⚠️ Unexpected error:', err)
+      setMessage(`Unexpected error: ${err.message || err}`)
     }
-  } catch (err) {
-    console.error('⚠️ Caught unexpected error:', err)
-    setMessage(`Unexpected error: ${err}`)
-  }
-  console.log("SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL)
-  console.log("SUPABASE_KEY", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
-
   }
 
   return (
