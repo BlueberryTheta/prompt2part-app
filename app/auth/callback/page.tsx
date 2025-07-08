@@ -9,19 +9,19 @@ export default function AuthCallback() {
 
   useEffect(() => {
     const handleAuthRedirect = async () => {
-      const { data, error } = await supabase.auth.getSession()
+      const { data, error } = await supabase.auth.getSessionFromUrl()
 
       if (error) {
-        console.error('Error retrieving session:', error)
-      } else if (data.session) {
-        router.push('/dashboard') // ✅ redirect to dashboard on success
-      } else {
-        router.push('/login') // fallback
+        console.error('❌ Error retrieving session from URL:', error)
+        router.push('/login')
+      } else if (data?.session) {
+        console.log('✅ Session established:', data.session)
+        router.push('/dashboard')
       }
     }
 
     handleAuthRedirect()
   }, [router])
 
-  return <p>Logging you in...</p>
+  return <p className="text-center p-4">🔄 Finishing login…</p>
 }
