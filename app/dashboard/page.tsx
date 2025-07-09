@@ -1,6 +1,8 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabaseClient'
 
 export default function DashboardPage() {
   const [prompt, setPrompt] = useState('')
@@ -8,6 +10,27 @@ export default function DashboardPage() {
   const [response, setResponse] = useState('')
   const [codeGenerated, setCodeGenerated] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+  const router = useRouter()
+
+  useEffect(() => {
+    const checkSession = async () => {
+      const { data: { session }, error } = await supabase.auth.getSession()
+
+      if (!session || error) {
+        router.push('/login')
+      } else {
+        setUserEmail(session.user.email ?? null)
+      }
+    }
+
+    checkSession()
+  }, [router])
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
 
   const handleSubmit = async () => {
     if (!prompt) return
@@ -39,11 +62,19 @@ export default function DashboardPage() {
 
   return (
     <div className="p-8 max-w-2xl mx-auto space-y-4">
-      <h1 className="text-xl font-bold">Generate a Custom 3D Part</h1>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-xl font-bold">Generate a Custom 3D Part</h1>
+        {userEmail && (
+          <div className="text-sm text-gray-600">
+            Signed in as: {userEmail}{' '}
+            <button onClick={handleLogout} className="ml-2 text-blue-500 underline">Logout</button>
+          </div>
+        )}
+      </div>
 
       <div className="space-y-2">
         {history.map((msg, i) => (
-          <div key={i} className={`p-2 ${msg.role === 'user' ? 'bg-black-100' : 'bg-black-100'} rounded`}>
+          <div key={i} className="p-2 bg-gray-100 rounded">
             <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> {msg.content}
           </div>
         ))}
@@ -60,7 +91,7 @@ export default function DashboardPage() {
       <button
         onClick={handleSubmit}
         disabled={loading}
-        className="bg-white-600 text-white px-4 py-2 rounded"
+        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
       >
         {loading ? 'Generating...' : 'Send'}
       </button>
