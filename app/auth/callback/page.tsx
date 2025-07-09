@@ -1,11 +1,11 @@
 'use client'
 export const dynamic = 'force-dynamic'
 
-import { useEffect } from 'react'
+import { Suspense, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 
-export default function AuthCallback() {
+function CallbackHandler() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -13,14 +13,14 @@ export default function AuthCallback() {
     const exchangeCode = async () => {
       const code = searchParams.get('code')
       if (!code) {
-        console.error('No auth code in URL')
+        console.error('No auth code found in URL')
         return router.push('/login')
       }
 
       const { data, error } = await supabase.auth.exchangeCodeForSession(code)
 
       if (error) {
-        console.error('❌ Auth error:', error.message)
+        console.error('Error exchanging code:', error.message)
         return router.push('/login')
       }
 
@@ -32,4 +32,12 @@ export default function AuthCallback() {
   }, [searchParams, router])
 
   return <p className="text-center p-4">🔄 Finishing login…</p>
+}
+
+export default function AuthCallbackPage() {
+  return (
+    <Suspense fallback={<p className="text-center p-4">🔄 Loading…</p>}>
+      <CallbackHandler />
+    </Suspense>
+  )
 }
