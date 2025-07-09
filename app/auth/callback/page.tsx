@@ -1,18 +1,25 @@
 'use client'
 
 import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 
 export default function AuthCallback() {
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   useEffect(() => {
-    const handleAuthRedirect = async () => {
-      const { data, error } = await supabase.auth.getSessionFromUrl()
+    const exchangeCode = async () => {
+      const code = searchParams.get('code')
+      if (!code) {
+        console.error('No auth code found in URL')
+        return router.push('/login')
+      }
+
+      const { data, error } = await supabase.auth.exchangeCodeForSession(code)
 
       if (error) {
-        console.error('❌ Error retrieving session from URL:', error)
+        console.error('❌ Error exchanging code for session:', error.message)
         router.push('/login')
       } else if (data?.session) {
         console.log('✅ Session established:', data.session)
@@ -20,8 +27,8 @@ export default function AuthCallback() {
       }
     }
 
-    handleAuthRedirect()
-  }, [router])
+    exchangeCode()
+  }, [searchParams, router])
 
   return <p className="text-center p-4">🔄 Finishing login…</p>
 }
