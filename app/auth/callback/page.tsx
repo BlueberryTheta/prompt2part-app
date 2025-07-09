@@ -1,4 +1,5 @@
 'use client'
+export const dynamic = 'force-dynamic'
 
 import { useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -12,19 +13,19 @@ export default function AuthCallback() {
     const exchangeCode = async () => {
       const code = searchParams.get('code')
       if (!code) {
-        console.error('No auth code found in URL')
+        console.error('No auth code in URL')
         return router.push('/login')
       }
 
       const { data, error } = await supabase.auth.exchangeCodeForSession(code)
 
       if (error) {
-        console.error('❌ Error exchanging code for session:', error.message)
-        router.push('/login')
-      } else if (data?.session) {
-        console.log('✅ Session established:', data.session)
-        router.push('/dashboard')
+        console.error('❌ Auth error:', error.message)
+        return router.push('/login')
       }
+
+      console.log('✅ Session established:', data.session)
+      router.push('/dashboard')
     }
 
     exchangeCode()
