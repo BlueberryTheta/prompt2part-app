@@ -5,12 +5,13 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 
 export default function DashboardPage() {
-  const [prompt, setPrompt] = useState('')
+  const [userPrompt, setUserPrompt] = useState('')
   const [history, setHistory] = useState<{ role: string; content: string }[]>([])
   const [response, setResponse] = useState('')
   const [codeGenerated, setCodeGenerated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
+  const [projects, setProjects] = useState<{ id: string; title: string }[]>([])
   const router = useRouter()
 
   useEffect(() => {
@@ -21,6 +22,18 @@ export default function DashboardPage() {
         router.push('/login')
       } else {
         setUserEmail(session.user.email ?? null)
+
+        const { data, error: projectError } = await supabase
+          .from('projects')
+          .select('id, title')
+          .eq('user_id', session.user.id)
+          .order('created_at', { ascending: false })
+
+        if (projectError) {
+          console.error('Failed to load projects:', projectError)
+        } else {
+          setProjects(data ?? [])
+        }
       }
     }
 
@@ -32,26 +45,67 @@ export default function DashboardPage() {
     router.push('/login')
   }
 
+  const handleRename = async (projectId: string) => {
+    const newTitle = window.prompt('Enter new project name:')
+    if (!newTitle) return
+
+    const { error } = await supabase
+      .from('projects')
+      .update({ title: newTitle })
+      .eq('id', projectId)
+
+    if (error) {
+      console.error('Rename failed:', error)
+      return
+    }
+
+    setProjects(prev =>
+      prev.map(p => (p.id === projectId ? { ...p, title: newTitle } : p))
+    )
+  }
+
+  const handleDelete = async (projectId: string) => {
+    if (!confirm('Are you sure you want to delete this project?')) return
+
+    const { error } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', projectId)
+
+    if (error) {
+      console.error('Delete failed:', error)
+      return
+    }
+
+    setProjects(prev => prev.filter(p => p.id !== projectId))
+  }
+
   const handleSubmit = async () => {
-    if (!prompt) return
+    if (!userPrompt) return
     setLoading(true)
 
-    const newHistory = [...history, { role: 'user', content: prompt }]
+    const newHistory = [...history, { role: 'user', content: userPrompt }]
 
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, history: newHistory }),
+        body: JSON.stringify({ prompt: userPrompt, history: newHistory }),
       })
 
       const data = await res.json()
-      console.log('Response from API:', data)
-
       setHistory([...newHistory, { role: 'assistant', content: data.content ?? '' }])
       setResponse(data?.code ?? data?.question ?? '')
       setCodeGenerated(!!data?.code)
-      setPrompt('')
+      setUserPrompt('')
+
+      // Reload project list
+      const { data: freshProjects, error } = await supabase
+        .from('projects')
+        .select('id, title')
+        .order('created_at', { ascending: false })
+
+      if (!error) setProjects(freshProjects ?? [])
     } catch (error) {
       console.error('Error:', error)
       setResponse('❌ Something went wrong')
@@ -61,7 +115,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="p-8 max-w-2xl mx-auto space-y-4">
+    <div className="p-8 max-w-2xl mx-auto space-y-6">
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-xl font-bold">Generate a Custom 3D Part</h1>
         {userEmail && (
@@ -72,6 +126,38 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* 📁 Project List */}
+      <div className="space-y-2">
+        <h2 className="text-lg font-semibold">📁 Saved Projects</h2>
+        {projects.length === 0 ? (
+          <p className="text-sm text-gray-500">No saved projects yet.</p>
+        ) : (
+          projects.map(project => (
+            <div
+              key={project.id}
+              className="flex justify-between items-center border border-gray-200 p-2 rounded"
+            >
+              <span>{project.title}</span>
+              <div className="space-x-2">
+                <button
+                  onClick={() => handleRename(project.id)}
+                  className="text-sm text-blue-600 underline"
+                >
+                  Rename
+                </button>
+                <button
+                  onClick={() => handleDelete(project.id)}
+                  className="text-sm text-red-600 underline"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* 🧠 Conversation */}
       <div className="space-y-2">
         {history.map((msg, i) => (
           <div key={i} className="p-2 bg-gray-100 rounded">
@@ -83,8 +169,8 @@ export default function DashboardPage() {
       <textarea
         className="border p-2 w-full"
         rows={3}
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
+        value={userPrompt}
+        onChange={(e) => setUserPrompt(e.target.value)}
         placeholder="Describe your part, or answer the AI's question..."
       />
 
