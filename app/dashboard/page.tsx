@@ -11,33 +11,33 @@ export default function DashboardPage() {
   const [codeGenerated, setCodeGenerated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
-  const [projects, setProjects] = useState<{ id: string; title: string }[]>([])
+  const [projects, setProjects] = useState<{ id: string; title: string; prompt: string; response: string; history: any }[]>([])
   const router = useRouter()
 
   useEffect(() => {
-    const checkSession = async () => {
+    const fetchData = async () => {
       const { data: { session }, error } = await supabase.auth.getSession()
-
       if (!session || error) {
         router.push('/login')
+        return
+      }
+
+      setUserEmail(session.user.email ?? null)
+
+      const { data, error: projectError } = await supabase
+        .from('projects')
+        .select('id, title, prompt, response, history')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: false })
+
+      if (projectError) {
+        console.error('Failed to load projects:', projectError)
       } else {
-        setUserEmail(session.user.email ?? null)
-
-        const { data, error: projectError } = await supabase
-          .from('projects')
-          .select('id, title')
-          .eq('user_id', session.user.id)
-          .order('created_at', { ascending: false })
-
-        if (projectError) {
-          console.error('Failed to load projects:', projectError)
-        } else {
-          setProjects(data ?? [])
-        }
+        setProjects(data ?? [])
       }
     }
 
-    checkSession()
+    fetchData()
   }, [router])
 
   const handleLogout = async () => {
@@ -80,6 +80,45 @@ export default function DashboardPage() {
     setProjects(prev => prev.filter(p => p.id !== projectId))
   }
 
+  const handleLoadProject = (projectId: string) => {
+    const project = projects.find(p => p.id === projectId)
+    if (project) {
+      setUserPrompt(project.prompt)
+      setResponse(project.response)
+      setCodeGenerated(!!project.response)
+      setHistory(project.history ?? [])
+    }
+  }
+
+  const handleSaveProject = async () => {
+    const title = window.prompt('Enter a title for your project:')
+    if (!title || !response) return
+
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+
+    const { error } = await supabase.from('projects').insert({
+      user_id: session.user.id,
+      title,
+      prompt: userPrompt,
+      response,
+      history
+    })
+
+    if (error) {
+      console.error('Save failed:', error)
+    } else {
+      // Refresh list
+      const { data: freshProjects } = await supabase
+        .from('projects')
+        .select('id, title, prompt, response, history')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: false })
+
+      setProjects(freshProjects ?? [])
+    }
+  }
+
   const handleSubmit = async () => {
     if (!userPrompt) return
     setLoading(true)
@@ -98,14 +137,6 @@ export default function DashboardPage() {
       setResponse(data?.code ?? data?.question ?? '')
       setCodeGenerated(!!data?.code)
       setUserPrompt('')
-
-      // Reload project list
-      const { data: freshProjects, error } = await supabase
-        .from('projects')
-        .select('id, title')
-        .order('created_at', { ascending: false })
-
-      if (!error) setProjects(freshProjects ?? [])
     } catch (error) {
       console.error('Error:', error)
       setResponse('❌ Something went wrong')
@@ -137,18 +168,15 @@ export default function DashboardPage() {
               key={project.id}
               className="flex justify-between items-center border border-gray-200 p-2 rounded"
             >
-              <span>{project.title}</span>
+              <span className="truncate">{project.title}</span>
               <div className="space-x-2">
-                <button
-                  onClick={() => handleRename(project.id)}
-                  className="text-sm text-blue-600 underline"
-                >
+                <button onClick={() => handleLoadProject(project.id)} className="text-sm text-green-600 underline">
+                  Load
+                </button>
+                <button onClick={() => handleRename(project.id)} className="text-sm text-blue-600 underline">
                   Rename
                 </button>
-                <button
-                  onClick={() => handleDelete(project.id)}
-                  className="text-sm text-red-600 underline"
-                >
+                <button onClick={() => handleDelete(project.id)} className="text-sm text-red-600 underline">
                   Delete
                 </button>
               </div>
@@ -174,13 +202,23 @@ export default function DashboardPage() {
         placeholder="Describe your part, or answer the AI's question..."
       />
 
-      <button
-        onClick={handleSubmit}
-        disabled={loading}
-        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-      >
-        {loading ? 'Generating...' : 'Send'}
-      </button>
+      <div className="flex gap-2">
+        <button
+          onClick={handleSubmit}
+          disabled={loading}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+        >
+          {loading ? 'Generating...' : 'Send'}
+        </button>
+        {codeGenerated && (
+          <button
+            onClick={handleSaveProject}
+            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded"
+          >
+            Save Project
+          </button>
+        )}
+      </div>
 
       {codeGenerated && (
         <div className="mt-4 p-4 bg-green-100 rounded">
