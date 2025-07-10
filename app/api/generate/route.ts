@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createServerClient } from '@supabase/ssr'
+import { cookies } from 'next/headers'
 
 export async function POST(req: NextRequest) {
   const { prompt, history = [] } = await req.json()
@@ -18,6 +20,7 @@ ask them exactly what is needed. Only provide code once the design is clear.`,
   ]
 
   try {
+    // Step 1: Contact OpenAI
     const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -37,13 +40,39 @@ ask them exactly what is needed. Only provide code once the design is clear.`,
 
     const isCode = reply.includes('module') || reply.includes(';') || reply.includes('//')
 
-    return NextResponse.json({ 
-      code: isCode ? reply : null, 
+    // Step 2: Save to Supabase (if user is logged in)
+    const cookieStore = cookies()
+    const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+      cookies: () => cookieStore,
+    })
+
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession()
+
+    if (session && isCode) {
+      const { error: dbError } = await supabase.from('projects').insert({
+        user_id: session.user.id,
+        prompt,
+        response: reply,
+        title: `Untitled Project - ${new Date().toLocaleString()}`
+      })
+
+      if (dbError) {
+        console.error('❌ Error saving project:', dbError)
+      }
+    }
+
+    // Step 3: Return response to frontend
+    return NextResponse.json({
+      code: isCode ? reply : null,
       question: isCode ? null : reply,
       role: 'assistant',
-      content: reply
+      content: reply,
     })
   } catch (err) {
-    return NextResponse.json({ error: 'Failed to contact OpenAI' }, { status: 500 })
+    console.error('❌ Failed to contact OpenAI or Supabase:', err)
+    return NextResponse.json({ error: 'Failed to generate response' }, { status: 500 })
   }
 }
