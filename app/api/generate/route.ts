@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { cookies as getCookies } from 'next/headers'
 
 export async function POST(req: NextRequest) {
   const { prompt, history = [] } = await req.json()
@@ -20,7 +20,23 @@ ask them exactly what is needed. Only provide code once the design is clear.`,
   ]
 
   try {
-    // Step 1: Contact OpenAI
+    // 1. Get cookies (SYNC, not async)
+    const cookieStore = getCookies()
+
+    // 2. Create Supabase client
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get: async (name: string) => (await cookieStore).get(name)?.value,
+          set: () => {}, // Not needed for read-only API calls
+          remove: () => {} // Not needed for read-only API calls
+        },
+      }
+    )
+
+    // 3. Contact OpenAI
     const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -37,15 +53,9 @@ ask them exactly what is needed. Only provide code once the design is clear.`,
 
     const data = await openaiRes.json()
     const reply = data.choices?.[0]?.message?.content || ''
-
     const isCode = reply.includes('module') || reply.includes(';') || reply.includes('//')
 
-    // Step 2: Save to Supabase (if user is logged in)
-    const cookieStore = cookies()
-    const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
-      cookies: () => cookieStore,
-    })
-
+    // 4. Save response to Supabase if logged in
     const {
       data: { session },
       error: sessionError,
@@ -64,7 +74,7 @@ ask them exactly what is needed. Only provide code once the design is clear.`,
       }
     }
 
-    // Step 3: Return response to frontend
+    // 5. Return result
     return NextResponse.json({
       code: isCode ? reply : null,
       question: isCode ? null : reply,
