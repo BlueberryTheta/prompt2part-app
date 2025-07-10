@@ -213,10 +213,11 @@ export default function DashboardPage() {
         {codeGenerated && (
           <button
             onClick={handleSaveProject}
-            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded"
-          >
-            Save Project
-          </button>
+  disabled={!userPrompt && history.length === 0}
+  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50"
+>
+  Save Project
+</button>
         )}
       </div>
 
