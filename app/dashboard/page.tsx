@@ -92,7 +92,7 @@ export default function DashboardPage() {
 
   const handleSaveProject = async () => {
     const title = window.prompt('Enter a title for your project:')
-    if (!title || !response) return
+    if (!title) return
 
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
@@ -108,7 +108,6 @@ export default function DashboardPage() {
     if (error) {
       console.error('Save failed:', error)
     } else {
-      // Refresh list
       const { data: freshProjects } = await supabase
         .from('projects')
         .select('id, title, prompt, response, history')
@@ -188,14 +187,15 @@ export default function DashboardPage() {
       {/* 🧠 Conversation */}
       <div className="space-y-2">
         {history.map((msg, i) => (
-          <div key={i} className="p-2 bg-gray-100 rounded">
-            <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> {msg.content}
+          <div key={i} className={`p-2 rounded ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'}`}>
+            <strong className="text-gray-800">{msg.role === 'user' ? 'You' : 'AI'}:</strong>{' '}
+            <span className="text-gray-800">{msg.content}</span>
           </div>
         ))}
       </div>
 
       <textarea
-        className="border p-2 w-full"
+        className="border p-2 w-full text-black"
         rows={3}
         value={userPrompt}
         onChange={(e) => setUserPrompt(e.target.value)}
@@ -210,21 +210,19 @@ export default function DashboardPage() {
         >
           {loading ? 'Generating...' : 'Send'}
         </button>
-        {codeGenerated && (
-          <button
-            onClick={handleSaveProject}
-  disabled={!userPrompt && history.length === 0}
-  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50"
->
-  Save Project
-</button>
-        )}
+        <button
+          onClick={handleSaveProject}
+          disabled={!userPrompt && history.length === 0}
+          className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50"
+        >
+          Save Project
+        </button>
       </div>
 
-      {codeGenerated && (
+      {response && (
         <div className="mt-4 p-4 bg-green-100 rounded">
           <h2 className="font-bold mb-2">✅ Your OpenSCAD Code:</h2>
-          <pre className="bg-white p-2 overflow-auto max-h-96">{response}</pre>
+          <pre className="bg-white p-2 overflow-auto max-h-96 text-black">{response}</pre>
         </div>
       )}
     </div>
