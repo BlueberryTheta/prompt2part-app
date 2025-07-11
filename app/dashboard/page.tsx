@@ -12,6 +12,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [projects, setProjects] = useState<{ id: string; title: string; prompt: string; response: string; history: any }[]>([])
+  const [showSaveSuccess, setShowSaveSuccess] = useState(false)
   const router = useRouter()
 
   useEffect(() => {
@@ -26,7 +27,7 @@ export default function DashboardPage() {
 
       const { data, error: projectError } = await supabase
         .from('projects')
-        .select('id, title, prompt, response, history')
+        .select('id, title, prompt, response, history, created_at')
         .eq('user_id', session.user.id)
         .order('created_at', { ascending: false })
 
@@ -94,11 +95,7 @@ export default function DashboardPage() {
     const title = window.prompt('Enter a title for your project:')
     if (!title) return
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser()
-
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError || !user) {
       console.error('No user found:', userError)
       return
@@ -119,7 +116,7 @@ export default function DashboardPage() {
 
     const { data: freshProjects, error: refreshError } = await supabase
       .from('projects')
-      .select('id, title, prompt, response, history')
+      .select('id, title, prompt, response, history, created_at')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
 
@@ -127,6 +124,8 @@ export default function DashboardPage() {
       console.error('Failed to refresh project list:', refreshError)
     } else {
       setProjects(freshProjects ?? [])
+      setShowSaveSuccess(true)
+      setTimeout(() => setShowSaveSuccess(false), 3000)
     }
   }
 
@@ -167,6 +166,12 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+      {showSaveSuccess && (
+        <div className="p-2 text-green-800 bg-green-100 border border-green-300 rounded">
+          ✅ Project saved successfully!
+        </div>
+      )}
 
       {/* 📁 Project List */}
       <div className="space-y-2">
