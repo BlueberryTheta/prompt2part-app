@@ -94,26 +94,38 @@ export default function DashboardPage() {
     const title = window.prompt('Enter a title for your project:')
     if (!title) return
 
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) return
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
 
-    const { error } = await supabase.from('projects').insert({
-      user_id: session.user.id,
+    if (userError || !user) {
+      console.error('No user found:', userError)
+      return
+    }
+
+    const { error: insertError } = await supabase.from('projects').insert({
+      user_id: user.id,
       title,
       prompt: userPrompt,
       response,
-      history
+      history,
     })
 
-    if (error) {
-      console.error('Save failed:', error)
-    } else {
-      const { data: freshProjects } = await supabase
-        .from('projects')
-        .select('id, title, prompt, response, history')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: false })
+    if (insertError) {
+      console.error('Save failed:', insertError)
+      return
+    }
 
+    const { data: freshProjects, error: refreshError } = await supabase
+      .from('projects')
+      .select('id, title, prompt, response, history')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+
+    if (refreshError) {
+      console.error('Failed to refresh project list:', refreshError)
+    } else {
       setProjects(freshProjects ?? [])
     }
   }
@@ -167,7 +179,7 @@ export default function DashboardPage() {
               key={project.id}
               className="flex justify-between items-center border border-gray-200 p-2 rounded"
             >
-              <span className="truncate">{project.title}</span>
+              <span className="truncate text-gray-900">{project.title}</span>
               <div className="space-x-2">
                 <button onClick={() => handleLoadProject(project.id)} className="text-sm text-green-600 underline">
                   Load
@@ -195,7 +207,7 @@ export default function DashboardPage() {
       </div>
 
       <textarea
-        className="border p-2 w-full text-black"
+        className="border p-2 w-full text-black bg-white"
         rows={3}
         value={userPrompt}
         onChange={(e) => setUserPrompt(e.target.value)}
