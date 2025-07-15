@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
+import PartViewer from '../components/PartViewer'
 
 export default function DashboardPage() {
   const [userPrompt, setUserPrompt] = useState('')
@@ -101,13 +102,20 @@ export default function DashboardPage() {
       return
     }
 
-    const { error: insertError } = await supabase.from('projects').insert({
-      user_id: user.id,
-      title,
-      prompt: userPrompt,
-      response,
-      history,
-    })
+    console.log('🔍 Saving project:', { title, userPrompt, response, history })
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('projects')
+      .insert({
+        user_id: user.id,
+        title,
+        prompt: userPrompt,
+        response,
+        history,
+      })
+      .select()
+
+    console.log('📥 Insert response:', inserted, 'error:', insertError)
 
     if (insertError) {
       console.error('Save failed:', insertError)
@@ -119,6 +127,8 @@ export default function DashboardPage() {
       .select('id, title, prompt, response, history, created_at')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
+
+    console.log('📂 Refreshed projects:', freshProjects, 'error:', refreshError)
 
     if (refreshError) {
       console.error('Failed to refresh project list:', refreshError)
@@ -173,7 +183,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 📁 Project List */}
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">📁 Saved Projects</h2>
         {projects.length === 0 ? (
@@ -201,7 +210,6 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* 🧠 Conversation */}
       <div className="space-y-2">
         {history.map((msg, i) => (
           <div key={i} className={`p-2 rounded ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'}`}>
@@ -236,10 +244,10 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {response && (
-        <div className="mt-4 p-4 bg-green-100 rounded">
-          <h2 className="font-bold mb-2">✅ Your OpenSCAD Code:</h2>
-          <pre className="bg-white p-2 overflow-auto max-h-96 text-black">{response}</pre>
+      {codeGenerated && response && (
+        <div className="mt-4">
+          <h2 className="font-bold mb-2 text-lg">🧱 3D Preview:</h2>
+          <PartViewer code={response} />
         </div>
       )}
     </div>
