@@ -66,7 +66,7 @@ export default function DashboardPage() {
         const formData = new FormData()
         formData.append('code', code)
 
-        const backendRes = await fetch('http://localhost:8000/render', {
+        const backendRes = await fetch('scad-backend-production.up.railway.app', {
           method: 'POST',
           body: formData,
         })
