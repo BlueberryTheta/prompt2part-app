@@ -12,8 +12,10 @@ export default function DashboardPage() {
   const [codeGenerated, setCodeGenerated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
-  const [projects, setProjects] = useState<{ id: string; title: string; prompt: string; response: string; history: any }[]>([])
+  const [projects, setProjects] = useState<any[]>([])
   const [showSaveSuccess, setShowSaveSuccess] = useState(false)
+  const [stlBlobUrl, setStlBlobUrl] = useState<string | null>(null)
+
   const router = useRouter()
 
   useEffect(() => {
@@ -32,112 +34,13 @@ export default function DashboardPage() {
         .eq('user_id', session.user.id)
         .order('created_at', { ascending: false })
 
-      if (projectError) {
-        console.error('Failed to load projects:', projectError)
-      } else {
+      if (!projectError) {
         setProjects(data ?? [])
       }
     }
 
     fetchData()
   }, [router])
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut()
-    router.push('/login')
-  }
-
-  const handleRename = async (projectId: string) => {
-    const newTitle = window.prompt('Enter new project name:')
-    if (!newTitle) return
-
-    const { error } = await supabase
-      .from('projects')
-      .update({ title: newTitle })
-      .eq('id', projectId)
-
-    if (error) {
-      console.error('Rename failed:', error)
-      return
-    }
-
-    setProjects(prev =>
-      prev.map(p => (p.id === projectId ? { ...p, title: newTitle } : p))
-    )
-  }
-
-  const handleDelete = async (projectId: string) => {
-    if (!confirm('Are you sure you want to delete this project?')) return
-
-    const { error } = await supabase
-      .from('projects')
-      .delete()
-      .eq('id', projectId)
-
-    if (error) {
-      console.error('Delete failed:', error)
-      return
-    }
-
-    setProjects(prev => prev.filter(p => p.id !== projectId))
-  }
-
-  const handleLoadProject = (projectId: string) => {
-    const project = projects.find(p => p.id === projectId)
-    if (project) {
-      setUserPrompt(project.prompt)
-      setResponse(project.response)
-      setCodeGenerated(!!project.response)
-      setHistory(project.history ?? [])
-    }
-  }
-
-  const handleSaveProject = async () => {
-    const title = window.prompt('Enter a title for your project:')
-    if (!title) return
-
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
-    if (userError || !user) {
-      console.error('No user found:', userError)
-      return
-    }
-
-    console.log('🔍 Saving project:', { title, userPrompt, response, history })
-
-    const { data: inserted, error: insertError } = await supabase
-      .from('projects')
-      .insert({
-        user_id: user.id,
-        title,
-        prompt: userPrompt,
-        response,
-        history,
-      })
-      .select()
-
-    console.log('📥 Insert response:', inserted, 'error:', insertError)
-
-    if (insertError) {
-      console.error('Save failed:', insertError)
-      return
-    }
-
-    const { data: freshProjects, error: refreshError } = await supabase
-      .from('projects')
-      .select('id, title, prompt, response, history, created_at')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-
-    console.log('📂 Refreshed projects:', freshProjects, 'error:', refreshError)
-
-    if (refreshError) {
-      console.error('Failed to refresh project list:', refreshError)
-    } else {
-      setProjects(freshProjects ?? [])
-      setShowSaveSuccess(true)
-      setTimeout(() => setShowSaveSuccess(false), 3000)
-    }
-  }
 
   const handleSubmit = async () => {
     if (!userPrompt) return
@@ -153,10 +56,25 @@ export default function DashboardPage() {
       })
 
       const data = await res.json()
+      const code = data?.code ?? data?.question ?? ''
       setHistory([...newHistory, { role: 'assistant', content: data.content ?? '' }])
-      setResponse(data?.code ?? data?.question ?? '')
-      setCodeGenerated(!!data?.code)
+      setResponse(code)
+      setCodeGenerated(!!code)
       setUserPrompt('')
+
+      if (code) {
+        const formData = new FormData()
+        formData.append('code', code)
+
+        const backendRes = await fetch('http://localhost:8000/render', {
+          method: 'POST',
+          body: formData,
+        })
+
+        const blob = await backendRes.blob()
+        const url = URL.createObjectURL(blob)
+        setStlBlobUrl(url)
+      }
     } catch (error) {
       console.error('Error:', error)
       setResponse('❌ Something went wrong')
@@ -165,14 +83,88 @@ export default function DashboardPage() {
     }
   }
 
+  const handleSaveProject = async () => {
+    if (!userPrompt && !response) return
+
+    const title = window.prompt('Enter a title for your project:')
+    if (!title) return
+
+    const { data: { user }, error } = await supabase.auth.getUser()
+    if (error || !user) {
+      console.error('User not found:', error)
+      return
+    }
+
+    const { error: insertError } = await supabase
+      .from('projects')
+      .insert({
+        user_id: user.id,
+        title,
+        prompt: userPrompt,
+        response,
+        history,
+      })
+
+    if (insertError) {
+      console.error('Save failed:', insertError)
+      return
+    }
+
+    setShowSaveSuccess(true)
+    setTimeout(() => setShowSaveSuccess(false), 3000)
+  }
+
+  const handleDownload = () => {
+    if (!stlBlobUrl) return
+    const link = document.createElement('a')
+    link.href = stlBlobUrl
+    link.download = 'model.stl'
+    link.click()
+  }
+
+  const handleLoadProject = (projectId: string) => {
+    const project = projects.find(p => p.id === projectId)
+    if (!project) return
+    setUserPrompt(project.prompt)
+    setResponse(project.response)
+    setCodeGenerated(true)
+    setHistory(project.history ?? [])
+  }
+
+  const handleRename = async (projectId: string) => {
+    const newTitle = window.prompt('Enter a new name:')
+    if (!newTitle) return
+
+    await supabase
+      .from('projects')
+      .update({ title: newTitle })
+      .eq('id', projectId)
+
+    setProjects(prev => prev.map(p => p.id === projectId ? { ...p, title: newTitle } : p))
+  }
+
+  const handleDelete = async (projectId: string) => {
+    const confirmDelete = confirm('Delete this project?')
+    if (!confirmDelete) return
+
+    await supabase
+      .from('projects')
+      .delete()
+      .eq('id', projectId)
+
+    setProjects(prev => prev.filter(p => p.id !== projectId))
+  }
+
   return (
     <div className="p-8 max-w-2xl mx-auto space-y-6">
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-xl font-bold">Generate a Custom 3D Part</h1>
         {userEmail && (
           <div className="text-sm text-gray-600">
-            Signed in as: {userEmail}{' '}
-            <button onClick={handleLogout} className="ml-2 text-blue-500 underline">Logout</button>
+            Signed in as: {userEmail}
+            <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="ml-2 text-blue-500 underline">
+              Logout
+            </button>
           </div>
         )}
       </div>
@@ -189,21 +181,12 @@ export default function DashboardPage() {
           <p className="text-sm text-gray-500">No saved projects yet.</p>
         ) : (
           projects.map(project => (
-            <div
-              key={project.id}
-              className="flex justify-between items-center border border-gray-200 p-2 rounded"
-            >
+            <div key={project.id} className="flex justify-between items-center border border-gray-200 p-2 rounded">
               <span className="truncate text-gray-900">{project.title}</span>
               <div className="space-x-2">
-                <button onClick={() => handleLoadProject(project.id)} className="text-sm text-green-600 underline">
-                  Load
-                </button>
-                <button onClick={() => handleRename(project.id)} className="text-sm text-blue-600 underline">
-                  Rename
-                </button>
-                <button onClick={() => handleDelete(project.id)} className="text-sm text-red-600 underline">
-                  Delete
-                </button>
+                <button onClick={() => handleLoadProject(project.id)} className="text-sm text-green-600 underline">Load</button>
+                <button onClick={() => handleRename(project.id)} className="text-sm text-blue-600 underline">Rename</button>
+                <button onClick={() => handleDelete(project.id)} className="text-sm text-red-600 underline">Delete</button>
               </div>
             </div>
           ))
@@ -224,7 +207,7 @@ export default function DashboardPage() {
         rows={3}
         value={userPrompt}
         onChange={(e) => setUserPrompt(e.target.value)}
-        placeholder="Describe your part, or answer the AI's question..."
+        placeholder="Describe your part..."
       />
 
       <div className="flex gap-2">
@@ -245,9 +228,19 @@ export default function DashboardPage() {
       </div>
 
       {codeGenerated && response && (
-        <div className="mt-4">
-          <h2 className="font-bold mb-2 text-lg">🧱 3D Preview:</h2>
-          <PartViewer code={response} />
+        <div className="mt-4 space-y-4">
+          <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
+          {stlBlobUrl && (
+            <>
+              <PartViewer stlUrl={stlBlobUrl} />
+              <button
+                onClick={handleDownload}
+                className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
+              >
+                ⬇️ Download STL
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
