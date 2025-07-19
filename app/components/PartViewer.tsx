@@ -1,7 +1,7 @@
 'use client'
 
-import React, { useRef } from 'react'
-import { Canvas, useFrame, useLoader } from '@react-three/fiber'
+import React, { useRef, useState, useEffect } from 'react'
+import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import { STLLoader } from 'three-stdlib'
 import { BufferGeometry, MeshStandardMaterial, Mesh } from 'three'
@@ -11,8 +11,21 @@ type PartViewerProps = {
 }
 
 function STLModel({ stlUrl }: { stlUrl: string }) {
-  const geometry = useLoader(STLLoader, stlUrl)
   const meshRef = useRef<Mesh>(null)
+  const [geometry, setGeometry] = useState<BufferGeometry | null>(null)
+
+  useEffect(() => {
+    if (!stlUrl) return
+
+    fetch(stlUrl)
+      .then(res => res.arrayBuffer())
+      .then(data => {
+        const loader = new STLLoader()
+        const geom = loader.parse(data)
+        setGeometry(geom)
+      })
+      .catch(err => console.error('Failed to load STL:', err))
+  }, [stlUrl])
 
   useFrame(() => {
     if (meshRef.current) {
@@ -20,11 +33,11 @@ function STLModel({ stlUrl }: { stlUrl: string }) {
     }
   })
 
-  return (
-    <mesh ref={meshRef} geometry={geometry as BufferGeometry}>
+  return geometry ? (
+    <mesh ref={meshRef} geometry={geometry}>
       <meshStandardMaterial color="#357edd" metalness={0.5} roughness={0.3} />
     </mesh>
-  )
+  ) : null
 }
 
 export default function PartViewer({ stlUrl }: PartViewerProps) {
