@@ -68,9 +68,18 @@ export default function DashboardPage() {
       formData.append('code', code)
 
       const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
+        
         method: 'POST',
         body: formData,
       })
+
+      const contentType = backendRes.headers.get('Content-Type') || ''
+console.log('Response Content-Type:', contentType)
+
+const debugText = await backendRes.clone().text()
+console.log('Backend response body:', debugText)
+
+
 
       if (!backendRes.ok) {
         const text = await backendRes.text()
@@ -85,7 +94,7 @@ export default function DashboardPage() {
         throw new Error('The STL file is empty.')
       }
 
-      const contentType = backendRes.headers.get('Content-Type') || ''
+      
       if (
         !contentType.includes('application/octet-stream') &&
         !contentType.includes('model/stl') &&
