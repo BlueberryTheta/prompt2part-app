@@ -85,7 +85,8 @@ export default function DashboardPage() {
 
       const formData = new FormData()
       console.log('Cleaned OpenSCAD code:', code)
-      formData.append('code', code)
+      formData.append('code', `$fn = 100;\n` + code)
+
 
       const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
         method: 'POST',
