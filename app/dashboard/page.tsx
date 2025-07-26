@@ -15,6 +15,7 @@ export default function DashboardPage() {
   const [projects, setProjects] = useState<any[]>([])
   const [showSaveSuccess, setShowSaveSuccess] = useState(false)
   const [stlBlobUrl, setStlBlobUrl] = useState<string | null>(null)
+  const [resolution, setResolution] = useState(100) // 👈 Add resolution state
 
   const router = useRouter()
 
@@ -85,8 +86,7 @@ export default function DashboardPage() {
 
       const formData = new FormData()
       console.log('Cleaned OpenSCAD code:', code)
-      formData.append('code', `$fn = 100;\n` + code)
-
+      formData.append('code', `$fn = ${resolution};\n` + code) // 👈 Include selected resolution
 
       const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
         method: 'POST',
@@ -221,6 +221,21 @@ export default function DashboardPage() {
           ✅ Project saved successfully!
         </div>
       )}
+
+      <div>
+        <label htmlFor="resolution" className="text-sm font-medium">Curve Resolution ($fn):</label>
+        <select
+          id="resolution"
+          value={resolution}
+          onChange={e => setResolution(Number(e.target.value))}
+          className="ml-2 border px-2 py-1 rounded"
+        >
+          <option value={10}>10 (Low)</option>
+          <option value={50}>50 (Medium)</option>
+          <option value={100}>100 (High)</option>
+          <option value={200}>200 (Very High)</option>
+        </select>
+      </div>
 
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">📁 Saved Projects</h2>
