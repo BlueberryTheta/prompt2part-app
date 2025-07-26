@@ -69,6 +69,7 @@ export default function DashboardPage() {
     if (!code) throw new Error('No OpenSCAD code returned from API.')
 
     const formData = new FormData()
+    console.log('Cleaned OpenSCAD code:', code)
     formData.append('code', code)
 
     const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
