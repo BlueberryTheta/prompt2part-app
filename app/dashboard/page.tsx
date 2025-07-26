@@ -42,79 +42,93 @@ export default function DashboardPage() {
     fetchData()
   }, [router])
 
-  const handleSubmit = async () => {
-  if (!userPrompt) return
-  setLoading(true)
+  const extractOpenSCAD = (input: string): string => {
+    const match = input.match(/```(?:scad|openscad)?\n([\s\S]*?)```/)
+    if (match) return match[1].trim()
 
-  const newHistory = [...history, { role: 'user', content: userPrompt }]
-
-  try {
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: userPrompt, history: newHistory }),
-    })
-
-    const data = await res.json()
-
-    // 🧽 Clean the code of markdown formatting
-    const rawCode = data?.code ?? data?.question ?? ''
-    const code = rawCode.replace(/```(scad|openscad)?/g, '').replace(/```/g, '').trim()
-
-    setHistory([...newHistory, { role: 'assistant', content: data.content ?? '' }])
-    setResponse(code)
-    setCodeGenerated(!!code)
-    setUserPrompt('')
-
-    if (!code) throw new Error('No OpenSCAD code returned from API.')
-
-    const formData = new FormData()
-    console.log('Cleaned OpenSCAD code:', code)
-    formData.append('code', code)
-
-    const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
-      method: 'POST',
-      body: formData,
-    })
-
-    const contentType = backendRes.headers.get('Content-Type') || ''
-    console.log('Response Content-Type:', contentType)
-
-    const debugText = await backendRes.clone().text()
-    console.log('Backend response body:', debugText)
-
-    if (!backendRes.ok) {
-      console.error('Backend error response:', debugText)
-      throw new Error(`Failed to render STL: ${backendRes.statusText}`)
-    }
-
-    const blob = await backendRes.blob()
-
-    if (blob.size === 0) {
-      console.error('Empty STL blob received.')
-      throw new Error('The STL file is empty.')
-    }
-
-    if (
-      !contentType.includes('application/octet-stream') &&
-      !contentType.includes('model/stl') &&
-      !contentType.includes('application/sla')
-    ) {
-      console.error('Unexpected Content-Type:', contentType)
-      throw new Error('Invalid STL content type received.')
-    }
-
-    const url = URL.createObjectURL(blob)
-    setStlBlobUrl(url)
-  } catch (error) {
-    console.error('Error:', error)
-    setResponse('❌ Something went wrong. Please try again.')
-    setStlBlobUrl(null)
-  } finally {
-    setLoading(false)
+    const lines = input.split('\n')
+    const codeLines = lines.filter(line =>
+      line.trim().startsWith('//') ||
+      line.includes('=') ||
+      line.includes('cube') ||
+      line.includes('cylinder') ||
+      line.includes('translate') ||
+      line.includes('difference') ||
+      line.includes('{') ||
+      line.includes('}')
+    )
+    return codeLines.join('\n').trim()
   }
-}
 
+  const handleSubmit = async () => {
+    if (!userPrompt) return
+    setLoading(true)
+
+    const newHistory = [...history, { role: 'user', content: userPrompt }]
+
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: userPrompt, history: newHistory }),
+      })
+
+      const data = await res.json()
+      const code = extractOpenSCAD(data?.code ?? data?.question ?? '')
+
+      setHistory([...newHistory, { role: 'assistant', content: data.content ?? '' }])
+      setResponse(code)
+      setCodeGenerated(!!code)
+      setUserPrompt('')
+
+      if (!code) throw new Error('No OpenSCAD code returned from API.')
+
+      const formData = new FormData()
+      console.log('Cleaned OpenSCAD code:', code)
+      formData.append('code', code)
+
+      const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const contentType = backendRes.headers.get('Content-Type') || ''
+      console.log('Response Content-Type:', contentType)
+
+      const debugText = await backendRes.clone().text()
+      console.log('Backend response body:', debugText)
+
+      if (!backendRes.ok) {
+        console.error('Backend error response:', debugText)
+        throw new Error(`Failed to render STL: ${backendRes.statusText}`)
+      }
+
+      const blob = await backendRes.blob()
+
+      if (blob.size === 0) {
+        console.error('Empty STL blob received.')
+        throw new Error('The STL file is empty.')
+      }
+
+      if (
+        !contentType.includes('application/octet-stream') &&
+        !contentType.includes('model/stl') &&
+        !contentType.includes('application/sla')
+      ) {
+        console.error('Unexpected Content-Type:', contentType)
+        throw new Error('Invalid STL content type received.')
+      }
+
+      const url = URL.createObjectURL(blob)
+      setStlBlobUrl(url)
+    } catch (error) {
+      console.error('Error:', error)
+      setResponse('❌ Something went wrong. Please try again.')
+      setStlBlobUrl(null)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleSaveProject = async () => {
     if (!userPrompt && !response) return
