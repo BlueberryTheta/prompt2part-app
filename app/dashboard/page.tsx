@@ -1,3 +1,4 @@
+
 'use client'
 
 import React, { useState, useEffect } from 'react'
@@ -15,7 +16,8 @@ export default function DashboardPage() {
   const [projects, setProjects] = useState<any[]>([])
   const [showSaveSuccess, setShowSaveSuccess] = useState(false)
   const [stlBlobUrl, setStlBlobUrl] = useState<string | null>(null)
-  const [resolution, setResolution] = useState(100) // 👈 Add resolution state
+  const [resolution, setResolution] = useState(100)
+  const [darkMode, setDarkMode] = useState(false)
 
   const router = useRouter()
 
@@ -85,8 +87,7 @@ export default function DashboardPage() {
       if (!code) throw new Error('No OpenSCAD code returned from API.')
 
       const formData = new FormData()
-      console.log('Cleaned OpenSCAD code:', code)
-      formData.append('code', `$fn = ${resolution};\n` + code) // 👈 Include selected resolution
+      formData.append('code', `$fn = ${resolution};\n` + code)
 
       const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
         method: 'POST',
@@ -94,31 +95,13 @@ export default function DashboardPage() {
       })
 
       const contentType = backendRes.headers.get('Content-Type') || ''
-      console.log('Response Content-Type:', contentType)
-
       const debugText = await backendRes.clone().text()
       console.log('Backend response body:', debugText)
 
-      if (!backendRes.ok) {
-        console.error('Backend error response:', debugText)
-        throw new Error(`Failed to render STL: ${backendRes.statusText}`)
-      }
+      if (!backendRes.ok) throw new Error(`Failed to render STL: ${backendRes.statusText}`)
 
       const blob = await backendRes.blob()
-
-      if (blob.size === 0) {
-        console.error('Empty STL blob received.')
-        throw new Error('The STL file is empty.')
-      }
-
-      if (
-        !contentType.includes('application/octet-stream') &&
-        !contentType.includes('model/stl') &&
-        !contentType.includes('application/sla')
-      ) {
-        console.error('Unexpected Content-Type:', contentType)
-        throw new Error('Invalid STL content type received.')
-      }
+      if (blob.size === 0) throw new Error('The STL file is empty.')
 
       const url = URL.createObjectURL(blob)
       setStlBlobUrl(url)
@@ -137,10 +120,7 @@ export default function DashboardPage() {
     if (!title) return
 
     const { data: { user }, error } = await supabase.auth.getUser()
-    if (error || !user) {
-      console.error('User not found:', error)
-      return
-    }
+    if (error || !user) return
 
     const { error: insertError } = await supabase
       .from('projects')
@@ -152,13 +132,10 @@ export default function DashboardPage() {
         history,
       })
 
-    if (insertError) {
-      console.error('Save failed:', insertError)
-      return
+    if (!insertError) {
+      setShowSaveSuccess(true)
+      setTimeout(() => setShowSaveSuccess(false), 3000)
     }
-
-    setShowSaveSuccess(true)
-    setTimeout(() => setShowSaveSuccess(false), 3000)
   }
 
   const handleDownload = () => {
@@ -203,32 +180,34 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="p-8 max-w-2xl mx-auto space-y-6">
-      <div className="flex justify-between items-center mb-4">
-        <h1 className="text-xl font-bold">Generate a Custom 3D Part</h1>
-        {userEmail && (
-          <div className="text-sm text-gray-600">
-            Signed in as: {userEmail}
-            <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="ml-2 text-blue-500 underline">
-              Logout
-            </button>
-          </div>
-        )}
+  <div className={`p-8 max-w-2xl mx-auto space-y-6 ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'} min-h-screen`}>
+    <div className="flex justify-between items-center mb-4">
+      <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
+      <div className="flex items-center space-x-2">
+        <span className="text-sm">{userEmail}</span>
+        <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="text-blue-400 underline text-sm">
+          Logout
+        </button>
+        <button onClick={() => setDarkMode(!darkMode)} className="text-xs px-2 py-1 border rounded">
+          {darkMode ? '☀️ Light' : '🌙 Dark'}
+        </button>
       </div>
+    </div>
 
-      {showSaveSuccess && (
-        <div className="p-2 text-green-800 bg-green-100 border border-green-300 rounded">
-          ✅ Project saved successfully!
-        </div>
-      )}
+    {showSaveSuccess && (
+      <div className="p-2 text-green-800 bg-green-100 border border-green-300 rounded dark:bg-green-900 dark:text-green-200">
+        ✅ Project saved successfully!
+      </div>
+    )}
 
+    <div className="space-y-4">
       <div>
         <label htmlFor="resolution" className="text-sm font-medium">Curve Resolution ($fn):</label>
         <select
           id="resolution"
           value={resolution}
           onChange={e => setResolution(Number(e.target.value))}
-          className="ml-2 border px-2 py-1 rounded"
+          className="ml-2 border px-2 py-1 rounded text-black"
         >
           <option value={10}>10 (Low)</option>
           <option value={50}>50 (Medium)</option>
@@ -237,35 +216,35 @@ export default function DashboardPage() {
         </select>
       </div>
 
-      <div className="space-y-2">
-        <h2 className="text-lg font-semibold">📁 Saved Projects</h2>
+      <div>
+        <h2 className="text-lg font-semibold mb-2">📁 Saved Projects</h2>
         {projects.length === 0 ? (
           <p className="text-sm text-gray-500">No saved projects yet.</p>
         ) : (
           projects.map(project => (
-            <div key={project.id} className="flex justify-between items-center border border-gray-200 p-2 rounded">
-              <span className="truncate text-gray-900">{project.title}</span>
-              <div className="space-x-2">
-                <button onClick={() => handleLoadProject(project.id)} className="text-sm text-green-600 underline">Load</button>
-                <button onClick={() => handleRename(project.id)} className="text-sm text-blue-600 underline">Rename</button>
-                <button onClick={() => handleDelete(project.id)} className="text-sm text-red-600 underline">Delete</button>
+            <div key={project.id} className="flex justify-between items-center border p-2 rounded">
+              <span className="truncate">{project.title}</span>
+              <div className="space-x-2 text-sm">
+                <button onClick={() => handleLoadProject(project.id)} className="text-green-500 underline">Load</button>
+                <button onClick={() => handleRename(project.id)} className="text-blue-500 underline">Rename</button>
+                <button onClick={() => handleDelete(project.id)} className="text-red-500 underline">Delete</button>
               </div>
             </div>
           ))
         )}
       </div>
 
-      <div className="space-y-2">
+      <div>
         {history.map((msg, i) => (
-          <div key={i} className={`p-2 rounded ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'}`}>
-            <strong className="text-gray-800">{msg.role === 'user' ? 'You' : 'AI'}:</strong>{' '}
-            <span className="text-gray-800">{msg.content}</span>
+          <div key={i} className={`p-2 rounded ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'} dark:bg-gray-700`}>
+            <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong>{' '}
+            <span>{msg.content}</span>
           </div>
         ))}
       </div>
 
       <textarea
-        className="border p-2 w-full text-black bg-white"
+        className="border p-2 w-full rounded text-black"
         rows={3}
         value={userPrompt}
         onChange={(e) => setUserPrompt(e.target.value)}
@@ -289,22 +268,19 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {codeGenerated && response && (
+      {codeGenerated && stlBlobUrl && (
         <div className="mt-4 space-y-4">
           <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
-          {stlBlobUrl && (
-            <>
-              <PartViewer stlUrl={stlBlobUrl} />
-              <button
-                onClick={handleDownload}
-                className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
-              >
-                ⬇️ Download STL
-              </button>
-            </>
-          )}
+          <PartViewer stlUrl={stlBlobUrl} />
+          <button
+            onClick={handleDownload}
+            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
+          >
+            ⬇️ Download STL
+          </button>
         </div>
       )}
     </div>
-  )
+  </div>
+)
 }
