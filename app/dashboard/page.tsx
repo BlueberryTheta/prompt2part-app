@@ -272,18 +272,24 @@ export default function DashboardPage() {
     </div>
 
     {/* Right Panel: 3D Viewer */}
-    {codeGenerated && stlBlobUrl && (
-      <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 rounded space-y-4">
-        <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
-        <PartViewer stlUrl={stlBlobUrl} />
-        <button
-          onClick={handleDownload}
-          className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
-        >
-          ⬇️ Download STL
-        </button>
-      </div>
-    )}
+    <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 rounded space-y-4">
+  <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
+  {stlBlobUrl ? (
+    <>
+      <PartViewer stlUrl={stlBlobUrl} />
+      <button
+        onClick={handleDownload}
+        className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
+      >
+        ⬇️ Download STL
+      </button>
+    </>
+  ) : (
+    <div className="text-sm text-gray-500 dark:text-gray-300 italic">
+      Nothing to show yet. Submit a prompt to generate a model.
+    </div>
+  )}
+</div>
   </div>
 )
 }
