@@ -77,7 +77,7 @@ export default function DashboardPage() {
       const data = await res.json()
       const code = extractOpenSCAD(data?.code ?? data?.question ?? '')
 
-      setHistory([...newHistory, { role: 'assistant', content: data.content ?? '' }])
+      setHistory([...newHistory, { role: 'assistant', content: '✅ Model generated successfully.' }])
       setResponse(code)
       setCodeGenerated(!!code)
       setUserPrompt('')
