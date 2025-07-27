@@ -180,28 +180,29 @@ export default function DashboardPage() {
   }
 
   return (
+  <div className={`flex flex-col lg:flex-row gap-4 p-4 min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}>
+    
+    {/* Left Panel: Prompt and Controls */}
     <div className="flex-1 space-y-6">
- <div className={`flex flex-col lg:flex-row gap-4 p-4 min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}>
       <div className="flex justify-between items-center mb-4">
-      <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
-      <div className="flex items-center space-x-2">
-        <span className="text-sm">{userEmail}</span>
-        <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="text-blue-400 underline text-sm">
-          Logout
-        </button>
-        <button onClick={() => setDarkMode(!darkMode)} className="text-xs px-2 py-1 border rounded">
-          {darkMode ? '☀️ Light' : '🌙 Dark'}
-        </button>
+        <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
+        <div className="flex items-center space-x-2">
+          <span className="text-sm">{userEmail}</span>
+          <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="text-blue-400 underline text-sm">
+            Logout
+          </button>
+          <button onClick={() => setDarkMode(!darkMode)} className="text-xs px-2 py-1 border rounded">
+            {darkMode ? '☀️ Light' : '🌙 Dark'}
+          </button>
+        </div>
       </div>
-    </div>
 
-    {showSaveSuccess && (
-      <div className="p-2 text-green-800 bg-green-100 border border-green-300 rounded dark:bg-green-900 dark:text-green-200">
-        ✅ Project saved successfully!
-      </div>
-    )}
+      {showSaveSuccess && (
+        <div className="p-2 text-green-800 bg-green-100 border border-green-300 rounded dark:bg-green-900 dark:text-green-200">
+          ✅ Project saved successfully!
+        </div>
+      )}
 
-    <div className="space-y-4">
       <div>
         <label htmlFor="resolution" className="text-sm font-medium">Curve Resolution ($fn):</label>
         <select
@@ -268,23 +269,21 @@ export default function DashboardPage() {
           Save Project
         </button>
       </div>
-</div>
-
-
-
-      {codeGenerated && stlBlobUrl && (
-  <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 rounded space-y-4">
-    <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
-    <PartViewer stlUrl={stlBlobUrl} />
-    <button
-      onClick={handleDownload}
-      className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
-    >
-      ⬇️ Download STL
-    </button>
-  </div>
-      )}
     </div>
+
+    {/* Right Panel: 3D Viewer */}
+    {codeGenerated && stlBlobUrl && (
+      <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 rounded space-y-4">
+        <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
+        <PartViewer stlUrl={stlBlobUrl} />
+        <button
+          onClick={handleDownload}
+          className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
+        >
+          ⬇️ Download STL
+        </button>
+      </div>
+    )}
   </div>
 )
 }
