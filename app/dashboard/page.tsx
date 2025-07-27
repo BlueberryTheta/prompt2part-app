@@ -1,4 +1,3 @@
-
 'use client'
 
 import React, { useState, useEffect } from 'react'
@@ -94,12 +93,6 @@ export default function DashboardPage() {
         body: formData,
       })
 
-      const contentType = backendRes.headers.get('Content-Type') || ''
-      const debugText = await backendRes.clone().text()
-      console.log('Backend response body:', debugText)
-
-      if (!backendRes.ok) throw new Error(`Failed to render STL: ${backendRes.statusText}`)
-
       const blob = await backendRes.blob()
       if (blob.size === 0) throw new Error('The STL file is empty.')
 
@@ -180,27 +173,28 @@ export default function DashboardPage() {
   }
 
   return (
-  <div className={`p-8 max-w-2xl mx-auto space-y-6 ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'} min-h-screen`}>
-    <div className="flex justify-between items-center mb-4">
-      <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
-      <div className="flex items-center space-x-2">
-        <span className="text-sm">{userEmail}</span>
-        <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="text-blue-400 underline text-sm">
-          Logout
-        </button>
-        <button onClick={() => setDarkMode(!darkMode)} className="text-xs px-2 py-1 border rounded">
-          {darkMode ? '☀️ Light' : '🌙 Dark'}
-        </button>
+  <div className={`flex flex-col lg:flex-row min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}>
+    {/* Left Panel: Prompt, History, Controls */}
+    <div className="flex-1 p-8 space-y-6 max-w-3xl">
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
+        <div className="flex items-center space-x-2">
+          <span className="text-sm">{userEmail}</span>
+          <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="text-blue-400 underline text-sm">
+            Logout
+          </button>
+          <button onClick={() => setDarkMode(!darkMode)} className="text-xs px-2 py-1 border rounded">
+            {darkMode ? '☀️ Light' : '🌙 Dark'}
+          </button>
+        </div>
       </div>
-    </div>
 
-    {showSaveSuccess && (
-      <div className="p-2 text-green-800 bg-green-100 border border-green-300 rounded dark:bg-green-900 dark:text-green-200">
-        ✅ Project saved successfully!
-      </div>
-    )}
+      {showSaveSuccess && (
+        <div className="p-2 text-green-800 bg-green-100 border border-green-300 rounded dark:bg-green-900 dark:text-green-200">
+          ✅ Project saved successfully!
+        </div>
+      )}
 
-    <div className="space-y-4">
       <div>
         <label htmlFor="resolution" className="text-sm font-medium">Curve Resolution ($fn):</label>
         <select
@@ -216,29 +210,10 @@ export default function DashboardPage() {
         </select>
       </div>
 
-      <div>
-        <h2 className="text-lg font-semibold mb-2">📁 Saved Projects</h2>
-        {projects.length === 0 ? (
-          <p className="text-sm text-gray-500">No saved projects yet.</p>
-        ) : (
-          projects.map(project => (
-            <div key={project.id} className="flex justify-between items-center border p-2 rounded">
-              <span className="truncate">{project.title}</span>
-              <div className="space-x-2 text-sm">
-                <button onClick={() => handleLoadProject(project.id)} className="text-green-500 underline">Load</button>
-                <button onClick={() => handleRename(project.id)} className="text-blue-500 underline">Rename</button>
-                <button onClick={() => handleDelete(project.id)} className="text-red-500 underline">Delete</button>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      <div>
+      <div className="max-h-64 overflow-y-auto space-y-2 border p-2 rounded bg-white dark:bg-gray-800 text-black dark:text-white">
         {history.map((msg, i) => (
           <div key={i} className={`p-2 rounded ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'} dark:bg-gray-700`}>
-            <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong>{' '}
-            <span>{msg.content}</span>
+            <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> <span>{msg.content}</span>
           </div>
         ))}
       </div>
@@ -267,20 +242,21 @@ export default function DashboardPage() {
           Save Project
         </button>
       </div>
-
-      {codeGenerated && stlBlobUrl && (
-        <div className="mt-4 space-y-4">
-          <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
-          <PartViewer stlUrl={stlBlobUrl} />
-          <button
-            onClick={handleDownload}
-            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
-          >
-            ⬇️ Download STL
-          </button>
-        </div>
-      )}
     </div>
+
+    {/* Right Panel: 3D Viewer */}
+    {codeGenerated && stlBlobUrl && (
+      <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800">
+        <h2 className="font-bold text-lg mb-2">🧱 3D Preview:</h2>
+        <PartViewer stlUrl={stlBlobUrl} />
+        <button
+          onClick={handleDownload}
+          className="mt-4 bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
+        >
+          ⬇️ Download STL
+        </button>
+      </div>
+    )}
   </div>
 )
 }
