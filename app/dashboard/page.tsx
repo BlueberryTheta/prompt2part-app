@@ -179,108 +179,33 @@ export default function DashboardPage() {
     setProjects(prev => prev.filter(p => p.id !== projectId))
   }
 
-  return (
-  <div className={`p-8 max-w-2xl mx-auto space-y-6 ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'} min-h-screen`}>
-    <div className="flex justify-between items-center mb-4">
-      <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
-      <div className="flex items-center space-x-2">
-        <span className="text-sm">{userEmail}</span>
-        <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="text-blue-400 underline text-sm">
-          Logout
-        </button>
-        <button onClick={() => setDarkMode(!darkMode)} className="text-xs px-2 py-1 border rounded">
-          {darkMode ? '☀️ Light' : '🌙 Dark'}
-        </button>
-      </div>
+ return (
+  <div className={`flex flex-col lg:flex-row gap-4 min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}>
+    {/* Left: Chat and Controls */}
+    <div className="flex-1 p-4 space-y-4 max-w-full">
+      {/* Everything from your dashboard content should remain inside here:
+          - User info
+          - Projects list
+          - History
+          - Text input
+          - Submit/save buttons
+      */}
+      {/* PLACEHOLDER: Replace with your existing content */}
     </div>
 
-    {showSaveSuccess && (
-      <div className="p-2 text-green-800 bg-green-100 border border-green-300 rounded dark:bg-green-900 dark:text-green-200">
-        ✅ Project saved successfully!
+    {/* Right: 3D Viewer (desktop side panel, stacked on mobile) */}
+    {codeGenerated && stlBlobUrl && (
+      <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 rounded">
+        <h2 className="font-bold text-lg mb-2">🧱 3D Preview:</h2>
+        <PartViewer stlUrl={stlBlobUrl} />
+        <button
+          onClick={handleDownload}
+          className="mt-4 bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
+        >
+          ⬇️ Download STL
+        </button>
       </div>
     )}
-
-    <div className="space-y-4">
-      <div>
-        <label htmlFor="resolution" className="text-sm font-medium">Curve Resolution ($fn):</label>
-        <select
-          id="resolution"
-          value={resolution}
-          onChange={e => setResolution(Number(e.target.value))}
-          className="ml-2 border px-2 py-1 rounded text-black"
-        >
-          <option value={10}>10 (Low)</option>
-          <option value={50}>50 (Medium)</option>
-          <option value={100}>100 (High)</option>
-          <option value={200}>200 (Very High)</option>
-        </select>
-      </div>
-
-      <div>
-        <h2 className="text-lg font-semibold mb-2">📁 Saved Projects</h2>
-        {projects.length === 0 ? (
-          <p className="text-sm text-gray-500">No saved projects yet.</p>
-        ) : (
-          projects.map(project => (
-            <div key={project.id} className="flex justify-between items-center border p-2 rounded">
-              <span className="truncate">{project.title}</span>
-              <div className="space-x-2 text-sm">
-                <button onClick={() => handleLoadProject(project.id)} className="text-green-500 underline">Load</button>
-                <button onClick={() => handleRename(project.id)} className="text-blue-500 underline">Rename</button>
-                <button onClick={() => handleDelete(project.id)} className="text-red-500 underline">Delete</button>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      <div>
-        {history.map((msg, i) => (
-          <div key={i} className={`p-2 rounded ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'} dark:bg-gray-700`}>
-            <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong>{' '}
-            <span>{msg.content}</span>
-          </div>
-        ))}
-      </div>
-
-      <textarea
-        className="border p-2 w-full rounded text-black"
-        rows={3}
-        value={userPrompt}
-        onChange={(e) => setUserPrompt(e.target.value)}
-        placeholder="Describe your part..."
-      />
-
-      <div className="flex gap-2">
-        <button
-          onClick={handleSubmit}
-          disabled={loading}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-        >
-          {loading ? 'Generating...' : 'Send'}
-        </button>
-        <button
-          onClick={handleSaveProject}
-          disabled={!userPrompt && history.length === 0}
-          className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50"
-        >
-          Save Project
-        </button>
-      </div>
-
-      {codeGenerated && stlBlobUrl && (
-        <div className="mt-4 space-y-4">
-          <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
-          <PartViewer stlUrl={stlBlobUrl} />
-          <button
-            onClick={handleDownload}
-            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
-          >
-            ⬇️ Download STL
-          </button>
-        </div>
-      )}
-    </div>
   </div>
 )
 }
