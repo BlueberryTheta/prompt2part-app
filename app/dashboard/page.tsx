@@ -180,8 +180,9 @@ export default function DashboardPage() {
   }
 
   return (
-  <div className={`p-8 max-w-2xl mx-auto space-y-6 ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'} min-h-screen`}>
-    <div className="flex justify-between items-center mb-4">
+    <div className="flex-1 space-y-6">
+ <div className={`flex flex-col lg:flex-row gap-4 p-4 min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}>
+      <div className="flex justify-between items-center mb-4">
       <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
       <div className="flex items-center space-x-2">
         <span className="text-sm">{userEmail}</span>
@@ -267,18 +268,21 @@ export default function DashboardPage() {
           Save Project
         </button>
       </div>
+</div>
+
+
 
       {codeGenerated && stlBlobUrl && (
-        <div className="mt-4 space-y-4">
-          <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
-          <PartViewer stlUrl={stlBlobUrl} />
-          <button
-            onClick={handleDownload}
-            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
-          >
-            ⬇️ Download STL
-          </button>
-        </div>
+  <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 rounded space-y-4">
+    <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
+    <PartViewer stlUrl={stlBlobUrl} />
+    <button
+      onClick={handleDownload}
+      className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
+    >
+      ⬇️ Download STL
+    </button>
+  </div>
       )}
     </div>
   </div>
