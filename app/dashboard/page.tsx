@@ -79,7 +79,7 @@ export default function DashboardPage() {
       const data = await res.json()
       const code = extractOpenSCAD(data?.code ?? data?.question ?? '')
 
-      setHistory([...newHistory, { role: 'assistant', content: data?.code ? '✅ Model generated successfully.' : '⚠️ No code returned.' }])
+      setHistory([...newHistory, { role: 'assistant', content: '✅ Model generated successfully.' }])
       setResponse(code)
       setCodeGenerated(!!code)
       setUserPrompt('')
@@ -94,6 +94,7 @@ export default function DashboardPage() {
         body: formData,
       })
 
+      const contentType = backendRes.headers.get('Content-Type') || ''
       const debugText = await backendRes.clone().text()
       console.log('Backend response body:', debugText)
 
@@ -180,15 +181,13 @@ export default function DashboardPage() {
 
   return (
     <div className={`flex flex-col lg:flex-row min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}>
-      <div className="flex-1 p-6 lg:max-w-3xl space-y-4">
-        <div className="flex justify-between items-center">
+      <div className="flex-1 p-6 max-w-4xl space-y-6">
+        <div className="flex justify-between items-center mb-4">
           <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
           <div className="flex items-center space-x-2">
             <span className="text-sm">{userEmail}</span>
             <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="text-blue-400 underline text-sm">Logout</button>
-            <button onClick={() => setDarkMode(!darkMode)} className="text-xs px-2 py-1 border rounded">
-              {darkMode ? '☀️ Light' : '🌙 Dark'}
-            </button>
+            <button onClick={() => setDarkMode(!darkMode)} className="text-xs px-2 py-1 border rounded">{darkMode ? '☀️ Light' : '🌙 Dark'}</button>
           </div>
         </div>
 
@@ -200,7 +199,12 @@ export default function DashboardPage() {
 
         <div>
           <label htmlFor="resolution" className="text-sm font-medium">Curve Resolution ($fn):</label>
-          <select id="resolution" value={resolution} onChange={e => setResolution(Number(e.target.value))} className="ml-2 border px-2 py-1 rounded text-black">
+          <select
+            id="resolution"
+            value={resolution}
+            onChange={e => setResolution(Number(e.target.value))}
+            className="ml-2 border px-2 py-1 rounded text-black"
+          >
             <option value={10}>10 (Low)</option>
             <option value={50}>50 (Medium)</option>
             <option value={100}>100 (High)</option>
@@ -208,10 +212,10 @@ export default function DashboardPage() {
           </select>
         </div>
 
-        <div className="max-h-64 overflow-y-auto space-y-2 border p-2 rounded">
+        <div className="h-64 overflow-y-auto border p-2 rounded bg-white dark:bg-gray-800 text-black dark:text-white">
           {history.map((msg, i) => (
-            <div key={i} className={`p-2 rounded ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'} dark:bg-gray-700`}>
-              <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> <span>{msg.content}</span>
+            <div key={i} className={`p-2 rounded mb-1 ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'} dark:bg-gray-700`}>
+              <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> {msg.content}
             </div>
           ))}
         </div>
@@ -235,12 +239,10 @@ export default function DashboardPage() {
       </div>
 
       {codeGenerated && stlBlobUrl && (
-        <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 sticky top-0 self-start h-fit">
+        <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 sticky top-0">
           <h2 className="font-bold text-lg mb-2">🧱 3D Preview:</h2>
           <PartViewer stlUrl={stlBlobUrl} />
-          <button onClick={handleDownload} className="mt-4 bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900">
-            ⬇️ Download STL
-          </button>
+          <button onClick={handleDownload} className="mt-4 bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900">⬇️ Download STL</button>
         </div>
       )}
     </div>
