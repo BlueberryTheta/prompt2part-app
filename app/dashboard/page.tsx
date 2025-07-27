@@ -180,16 +180,9 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className={`flex flex-col lg:flex-row min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}>
-      <div className="flex-1 p-6 max-w-4xl space-y-6">
-        <div className="flex justify-between items-center mb-4">
-          <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
-          <div className="flex items-center space-x-2">
-            <span className="text-sm">{userEmail}</span>
-            <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="text-blue-400 underline text-sm">Logout</button>
-            <button onClick={() => setDarkMode(!darkMode)} className="text-xs px-2 py-1 border rounded">{darkMode ? '☀️ Light' : '🌙 Dark'}</button>
-          </div>
-        </div>
+    <div className={`flex flex-col lg:flex-row gap-4 p-8 ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'} min-h-screen`}>
+      <div className="flex-1 space-y-4 max-w-3xl">
+        <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
 
         {showSaveSuccess && (
           <div className="p-2 text-green-800 bg-green-100 border border-green-300 rounded dark:bg-green-900 dark:text-green-200">
@@ -212,10 +205,10 @@ export default function DashboardPage() {
           </select>
         </div>
 
-        <div className="h-64 overflow-y-auto border p-2 rounded bg-white dark:bg-gray-800 text-black dark:text-white">
+        <div>
           {history.map((msg, i) => (
-            <div key={i} className={`p-2 rounded mb-1 ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'} dark:bg-gray-700`}>
-              <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> {msg.content}
+            <div key={i} className={`p-2 rounded ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'} dark:bg-gray-700`}>
+              <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> <span>{msg.content}</span>
             </div>
           ))}
         </div>
@@ -229,20 +222,33 @@ export default function DashboardPage() {
         />
 
         <div className="flex gap-2">
-          <button onClick={handleSubmit} disabled={loading} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+          >
             {loading ? 'Generating...' : 'Send'}
           </button>
-          <button onClick={handleSaveProject} disabled={!userPrompt && history.length === 0} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50">
+          <button
+            onClick={handleSaveProject}
+            disabled={!userPrompt && history.length === 0}
+            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50"
+          >
             Save Project
           </button>
         </div>
       </div>
 
       {codeGenerated && stlBlobUrl && (
-        <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 sticky top-0">
+        <div className="w-full lg:w-[40%] bg-gray-100 dark:bg-gray-800 p-4 rounded">
           <h2 className="font-bold text-lg mb-2">🧱 3D Preview:</h2>
           <PartViewer stlUrl={stlBlobUrl} />
-          <button onClick={handleDownload} className="mt-4 bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900">⬇️ Download STL</button>
+          <button
+            onClick={handleDownload}
+            className="mt-4 bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
+          >
+            ⬇️ Download STL
+          </button>
         </div>
       )}
     </div>
