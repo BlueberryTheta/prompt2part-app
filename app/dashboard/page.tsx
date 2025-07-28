@@ -181,17 +181,23 @@ export default function DashboardPage() {
 
   return (
   <div className={`flex flex-col lg:flex-row gap-4 p-4 min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}>
-    
-    {/* Left Panel: Prompt and Controls */}
+
+    {/* Left Panel */}
     <div className="flex-1 space-y-6">
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
         <div className="flex items-center space-x-2">
           <span className="text-sm">{userEmail}</span>
-          <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))} className="text-blue-400 underline text-sm">
+          <button
+            onClick={() => supabase.auth.signOut().then(() => router.push('/login'))}
+            className="text-blue-500 dark:text-blue-300 underline text-sm"
+          >
             Logout
           </button>
-          <button onClick={() => setDarkMode(!darkMode)} className="text-xs px-2 py-1 border rounded">
+          <button
+            onClick={() => setDarkMode(!darkMode)}
+            className="text-xs px-2 py-1 border border-gray-400 dark:border-gray-600 rounded"
+          >
             {darkMode ? '☀️ Light' : '🌙 Dark'}
           </button>
         </div>
@@ -204,12 +210,14 @@ export default function DashboardPage() {
       )}
 
       <div>
-        <label htmlFor="resolution" className="text-sm font-medium">Curve Resolution ($fn):</label>
+        <label htmlFor="resolution" className="text-sm font-medium">
+          Curve Resolution ($fn):
+        </label>
         <select
           id="resolution"
           value={resolution}
           onChange={e => setResolution(Number(e.target.value))}
-          className="ml-2 border px-2 py-1 rounded text-black"
+          className="ml-2 border px-2 py-1 rounded bg-white dark:bg-gray-700 dark:text-white"
         >
           <option value={10}>10 (Low)</option>
           <option value={50}>50 (Medium)</option>
@@ -221,32 +229,38 @@ export default function DashboardPage() {
       <div>
         <h2 className="text-lg font-semibold mb-2">📁 Saved Projects</h2>
         {projects.length === 0 ? (
-          <p className="text-sm text-gray-500">No saved projects yet.</p>
+          <p className="text-sm text-gray-600 dark:text-gray-400">No saved projects yet.</p>
         ) : (
           projects.map(project => (
-            <div key={project.id} className="flex justify-between items-center border p-2 rounded">
+            <div key={project.id} className="flex justify-between items-center border border-gray-300 dark:border-gray-600 p-2 rounded bg-gray-50 dark:bg-gray-700">
               <span className="truncate">{project.title}</span>
               <div className="space-x-2 text-sm">
-                <button onClick={() => handleLoadProject(project.id)} className="text-green-500 underline">Load</button>
-                <button onClick={() => handleRename(project.id)} className="text-blue-500 underline">Rename</button>
-                <button onClick={() => handleDelete(project.id)} className="text-red-500 underline">Delete</button>
+                <button onClick={() => handleLoadProject(project.id)} className="text-green-600 dark:text-green-400 underline">Load</button>
+                <button onClick={() => handleRename(project.id)} className="text-blue-600 dark:text-blue-400 underline">Rename</button>
+                <button onClick={() => handleDelete(project.id)} className="text-red-600 dark:text-red-400 underline">Delete</button>
               </div>
             </div>
           ))
         )}
       </div>
 
-      <div>
+      <div className="space-y-2">
         {history.map((msg, i) => (
-          <div key={i} className={`p-2 rounded ${msg.role === 'user' ? 'bg-gray-200' : 'bg-gray-100'} dark:bg-gray-700`}>
-            <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong>{' '}
-            <span>{msg.content}</span>
+          <div
+            key={i}
+            className={`p-2 rounded text-sm ${
+              msg.role === 'user'
+                ? 'bg-gray-200 dark:bg-gray-600'
+                : 'bg-gray-100 dark:bg-gray-700'
+            }`}
+          >
+            <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> {msg.content}
           </div>
         ))}
       </div>
 
       <textarea
-        className="border p-2 w-full rounded text-black"
+        className="border px-2 py-1 w-full rounded bg-white dark:bg-gray-700 dark:text-white"
         rows={3}
         value={userPrompt}
         onChange={(e) => setUserPrompt(e.target.value)}
@@ -257,7 +271,7 @@ export default function DashboardPage() {
         <button
           onClick={handleSubmit}
           disabled={loading}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded disabled:opacity-50"
         >
           {loading ? 'Generating...' : 'Send'}
         </button>
@@ -273,23 +287,23 @@ export default function DashboardPage() {
 
     {/* Right Panel: 3D Viewer */}
     <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 rounded space-y-4">
-  <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
-  {stlBlobUrl ? (
-    <>
-      <PartViewer stlUrl={stlBlobUrl} />
-      <button
-        onClick={handleDownload}
-        className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
-      >
-        ⬇️ Download STL
-      </button>
-    </>
-  ) : (
-    <div className="text-sm text-gray-500 dark:text-gray-300 italic">
-      Nothing to show yet. Submit a prompt to generate a model.
+      <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
+      {stlBlobUrl ? (
+        <>
+          <PartViewer stlUrl={stlBlobUrl} />
+          <button
+            onClick={handleDownload}
+            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
+          >
+            ⬇️ Download STL
+          </button>
+        </>
+      ) : (
+        <div className="text-sm text-gray-600 dark:text-gray-300 italic">
+          Nothing to show yet. Submit a prompt to generate a model.
+        </div>
+      )}
     </div>
-  )}
-</div>
   </div>
 )
 }
