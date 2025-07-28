@@ -65,55 +65,42 @@ export default function DashboardPage() {
   }
 
   const handleSubmit = async () => {
-    if (!userPrompt) return
-    setLoading(true)
+  if (!userPrompt) return
+  setLoading(true)
 
-    const newHistory = [...history, { role: 'user', content: userPrompt }]
+  // Remove any previous assistant messages that contain confirmation only
+  const filteredHistory = history.filter(
+    (msg) => !(msg.role === 'assistant' && msg.content.includes('✅ Model generated'))
+  )
 
-    try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: userPrompt, history: newHistory }),
-      })
+  const newHistory = [...filteredHistory, { role: 'user', content: userPrompt }]
 
-      const data = await res.json()
-      const code = extractOpenSCAD(data?.code ?? data?.question ?? '')
+  try {
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: userPrompt, history: newHistory }),
+    })
 
-      setHistory([...newHistory, { role: 'assistant', content: '✅ Model generated successfully.' }])
-      setResponse(code)
-      setCodeGenerated(!!code)
-      setUserPrompt('')
+    const data = await res.json()
+    const code = extractOpenSCAD(data?.code ?? data?.question ?? '')
 
-      if (!code) throw new Error('No OpenSCAD code returned from API.')
+    setHistory([...newHistory, { role: 'assistant', content: '✅ Model generated successfully.' }])
+    setResponse(code)
+    setCodeGenerated(!!code)
+    setUserPrompt('')
 
-      const formData = new FormData()
-      formData.append('code', `$fn = ${resolution};\n` + code)
+    if (!code) throw new Error('No OpenSCAD code returned from API.')
 
-      const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
-        method: 'POST',
-        body: formData,
-      })
-
-      const contentType = backendRes.headers.get('Content-Type') || ''
-      const debugText = await backendRes.clone().text()
-      console.log('Backend response body:', debugText)
-
-      if (!backendRes.ok) throw new Error(`Failed to render STL: ${backendRes.statusText}`)
-
-      const blob = await backendRes.blob()
-      if (blob.size === 0) throw new Error('The STL file is empty.')
-
-      const url = URL.createObjectURL(blob)
-      setStlBlobUrl(url)
-    } catch (error) {
-      console.error('Error:', error)
-      setResponse('❌ Something went wrong. Please try again.')
-      setStlBlobUrl(null)
-    } finally {
-      setLoading(false)
-    }
+    renderStlFromCode(code)
+  } catch (error) {
+    console.error('Error:', error)
+    setResponse('❌ Something went wrong. Please try again.')
+    setStlBlobUrl(null)
+  } finally {
+    setLoading(false)
   }
+}
 
   const renderStlFromCode = async (code: string) => {
   try {
