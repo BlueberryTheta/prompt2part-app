@@ -244,18 +244,18 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <div className="space-y-2">
-        {history.map((msg, i) => (
-          <div
-            key={i}
-            className={`p-2 rounded text-sm ${
-              msg.role === 'user'
-                ? 'bg-gray-200 dark:bg-gray-600'
-                : 'bg-gray-100 dark:bg-gray-700'
-            }`}
-          >
-            <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> {msg.content}
-          </div>
+      <div className="max-h-64 overflow-y-auto space-y-2 border border-gray-300 dark:border-gray-600 p-2 rounded bg-gray-50 dark:bg-gray-700">
+  {history.map((msg, i) => (
+    <div
+      key={i}
+      className={`p-2 rounded text-sm ${
+        msg.role === 'user'
+          ? 'bg-gray-200 dark:bg-gray-600'
+          : 'bg-gray-100 dark:bg-gray-800'
+      }`}
+    >
+      <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> {msg.content}
+    </div>
         ))}
       </div>
 
