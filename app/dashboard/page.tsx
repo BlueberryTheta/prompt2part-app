@@ -68,12 +68,7 @@ export default function DashboardPage() {
   if (!userPrompt) return
   setLoading(true)
 
-  // Remove any previous assistant messages that contain confirmation only
-  const filteredHistory = history.filter(
-    (msg) => !(msg.role === 'assistant' && msg.content.includes('✅ Model generated'))
-  )
-
-  const newHistory = [...filteredHistory, { role: 'user', content: userPrompt }]
+  const newHistory = [...history, { role: 'user', content: userPrompt }]
 
   try {
     const res = await fetch('/api/generate', {
@@ -83,16 +78,21 @@ export default function DashboardPage() {
     })
 
     const data = await res.json()
-    const code = extractOpenSCAD(data?.code ?? data?.question ?? '')
+    const aiContent = data?.code ?? data?.question ?? ''
+    const code = extractOpenSCAD(aiContent)
 
-    setHistory([...newHistory, { role: 'assistant', content: '✅ Model generated successfully.' }])
-    setResponse(code)
-    setCodeGenerated(!!code)
+    if (code) {
+      // Add to render only, don't show in chat
+      setResponse(code)
+      setCodeGenerated(true)
+      renderStlFromCode(code)
+    } else {
+      // No valid code → show AI message in chat
+      newHistory.push({ role: 'assistant', content: aiContent })
+    }
+
+    setHistory(newHistory)
     setUserPrompt('')
-
-    if (!code) throw new Error('No OpenSCAD code returned from API.')
-
-    renderStlFromCode(code)
   } catch (error) {
     console.error('Error:', error)
     setResponse('❌ Something went wrong. Please try again.')
