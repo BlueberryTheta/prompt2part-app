@@ -18,6 +18,7 @@ export default function DashboardPage() {
   const [stlBlobUrl, setStlBlobUrl] = useState<string | null>(null)
   const [resolution, setResolution] = useState(100)
   const [darkMode, setDarkMode] = useState(false)
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
 
   const router = useRouter()
 
@@ -154,6 +155,7 @@ export default function DashboardPage() {
   setResponse(project.response)
   setCodeGenerated(true)
   setHistory(project.history ?? [])
+  setCurrentProjectId(projectId)
 
   try {
     const formData = new FormData()
@@ -178,7 +180,25 @@ export default function DashboardPage() {
     console.error('Error rendering saved project:', error)
     setStlBlobUrl(null)
   }
+}
+
+const handleUpdateProject = async () => {
+  if (!currentProjectId) return
+
+  const { error } = await supabase
+    .from('projects')
+    .update({
+      prompt: userPrompt,
+      response,
+      history,
+    })
+    .eq('id', currentProjectId)
+
+  if (!error) {
+    setShowSaveSuccess(true)
+    setTimeout(() => setShowSaveSuccess(false), 3000)
   }
+}
 
   const handleRename = async (projectId: string) => {
     const newTitle = window.prompt('Enter a new name:')
@@ -293,21 +313,31 @@ export default function DashboardPage() {
       />
 
       <div className="flex gap-2">
-        <button
-          onClick={handleSubmit}
-          disabled={loading}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded disabled:opacity-50"
-        >
-          {loading ? 'Generating...' : 'Send'}
-        </button>
-        <button
-          onClick={handleSaveProject}
-          disabled={!userPrompt && history.length === 0}
-          className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50"
-        >
-          Save Project
-        </button>
-      </div>
+  <button
+    onClick={handleSubmit}
+    disabled={loading}
+    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+  >
+    {loading ? 'Generating...' : 'Send'}
+  </button>
+
+  {currentProjectId ? (
+    <button
+      onClick={handleUpdateProject}
+      className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded"
+    >
+      Save Changes
+    </button>
+  ) : (
+    <button
+      onClick={handleSaveProject}
+      disabled={!userPrompt && history.length === 0}
+      className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50"
+    >
+      Save as New Project
+    </button>
+  )}
+</div>
     </div>
 
     {/* Right Panel: 3D Viewer */}
