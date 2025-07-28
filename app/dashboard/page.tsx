@@ -146,13 +146,38 @@ export default function DashboardPage() {
     link.click()
   }
 
-  const handleLoadProject = (projectId: string) => {
-    const project = projects.find(p => p.id === projectId)
-    if (!project) return
-    setUserPrompt(project.prompt)
-    setResponse(project.response)
-    setCodeGenerated(true)
-    setHistory(project.history ?? [])
+  const handleLoadProject = async (projectId: string) => {
+  const project = projects.find(p => p.id === projectId)
+  if (!project) return
+
+  setUserPrompt(project.prompt)
+  setResponse(project.response)
+  setCodeGenerated(true)
+  setHistory(project.history ?? [])
+
+  try {
+    const formData = new FormData()
+    formData.append('code', `$fn = ${resolution};\n` + project.response)
+
+    const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
+      method: 'POST',
+      body: formData,
+    })
+
+    const debugText = await backendRes.clone().text()
+    console.log('Backend response (load):', debugText)
+
+    if (!backendRes.ok) throw new Error(`Failed to render STL: ${backendRes.statusText}`)
+
+    const blob = await backendRes.blob()
+    if (blob.size === 0) throw new Error('The STL file is empty.')
+
+    const url = URL.createObjectURL(blob)
+    setStlBlobUrl(url)
+  } catch (error) {
+    console.error('Error rendering saved project:', error)
+    setStlBlobUrl(null)
+  }
   }
 
   const handleRename = async (projectId: string) => {
