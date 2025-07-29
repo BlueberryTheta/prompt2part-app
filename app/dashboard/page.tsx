@@ -1,7 +1,7 @@
 
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import PartViewer from '../components/PartViewer'
@@ -49,6 +49,8 @@ export default function DashboardPage() {
     fetchData()
   }, [router])
 
+
+  
   const extractOpenSCAD = (input: string): string => {
     const match = input.match(/```(?:scad|openscad)?\n([\s\S]*?)```/)
     if (match) return match[1].trim()
@@ -67,21 +69,14 @@ export default function DashboardPage() {
     return codeLines.join('\n').trim()
   }
 
-const handleUndo = () => {
+const handleUndo = useCallback(() => {
   if (pastStates.length === 0) return
-
   const last = pastStates[pastStates.length - 1]
-  setPastStates(prev => prev.slice(0, -1))
 
+  setPastStates(prev => prev.slice(0, -1))
   setFutureStates(future => [
     ...future,
-    {
-      history,
-      response,
-      stlBlobUrl,
-      userPrompt,
-      codeGenerated
-    }
+    { history, response, stlBlobUrl, userPrompt, codeGenerated }
   ])
 
   setHistory(last.history)
@@ -89,23 +84,16 @@ const handleUndo = () => {
   setStlBlobUrl(last.stlBlobUrl)
   setUserPrompt(last.userPrompt)
   setCodeGenerated(last.codeGenerated)
-}
+}, [pastStates, history, response, stlBlobUrl, userPrompt, codeGenerated])
 
-const handleRedo = () => {
+const handleRedo = useCallback(() => {
   if (futureStates.length === 0) return
-
   const next = futureStates[futureStates.length - 1]
-  setFutureStates(future => future.slice(0, -1))
 
+  setFutureStates(future => future.slice(0, -1))
   setPastStates(prev => [
     ...prev,
-    {
-      history,
-      response,
-      stlBlobUrl,
-      userPrompt,
-      codeGenerated
-    }
+    { history, response, stlBlobUrl, userPrompt, codeGenerated }
   ])
 
   setHistory(next.history)
@@ -113,8 +101,29 @@ const handleRedo = () => {
   setStlBlobUrl(next.stlBlobUrl)
   setUserPrompt(next.userPrompt)
   setCodeGenerated(next.codeGenerated)
-}
+}, [futureStates, history, response, stlBlobUrl, userPrompt, codeGenerated])
 
+useEffect(() => {
+  const handleKeyDown = (e: KeyboardEvent) => {
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+    const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey
+
+    // Undo: Ctrl+Z / Cmd+Z
+    if (ctrlOrCmd && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault()
+      handleUndo()
+    }
+
+    // Redo: Ctrl+Shift+Z / Cmd+Shift+Z
+    if (ctrlOrCmd && e.key === 'z' && e.shiftKey) {
+      e.preventDefault()
+      handleRedo()
+    }
+  }
+
+  window.addEventListener('keydown', handleKeyDown)
+  return () => window.removeEventListener('keydown', handleKeyDown)
+}, [handleUndo, handleRedo])
 
   const handleSubmit = async () => {
   if (!userPrompt) return
