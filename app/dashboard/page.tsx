@@ -47,6 +47,24 @@ export default function DashboardPage() {
     fetchData()
   }, [router])
 
+useEffect(() => {
+  // Don't record empty state on initial mount
+  if (!userPrompt && !response && !history.length && !stlBlobUrl) return;
+
+  setPastStates(prev => [
+    ...prev,
+    {
+      history,
+      response,
+      stlBlobUrl,
+      userPrompt,
+      codeGenerated
+    }
+  ]);
+// Add only the dependencies you want to trigger an undo snapshot
+}, [response, userPrompt, stlBlobUrl, history, codeGenerated]);
+
+
   const extractOpenSCAD = (input: string): string => {
     const match = input.match(/```(?:scad|openscad)?\n([\s\S]*?)```/)
     if (match) return match[1].trim()
@@ -64,17 +82,6 @@ export default function DashboardPage() {
     )
     return codeLines.join('\n').trim()
   }
-
-  setPastStates(prev => [
-  ...prev,
-  {
-    history,
-    response,
-    stlBlobUrl,
-    userPrompt,
-    codeGenerated
-  }
-])
 
 const handleUndo = () => {
   if (pastStates.length === 0) return
