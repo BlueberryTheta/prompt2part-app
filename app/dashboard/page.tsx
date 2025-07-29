@@ -20,6 +20,8 @@ export default function DashboardPage() {
   const [darkMode, setDarkMode] = useState(false)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
   const [pastStates, setPastStates] = useState<any[]>([])
+  const [futureStates, setFutureStates] = useState<any[]>([])
+
 
   const router = useRouter()
 
@@ -61,6 +63,7 @@ useEffect(() => {
       codeGenerated
     }
   ]);
+  setFutureStates([]) // clear redo stack on new action
 // Add only the dependencies you want to trigger an undo snapshot
 }, [response, userPrompt, stlBlobUrl, history, codeGenerated]);
 
@@ -89,11 +92,46 @@ const handleUndo = () => {
   const last = pastStates[pastStates.length - 1]
   setPastStates(prev => prev.slice(0, -1))
 
+  setFutureStates(future => [
+    ...future,
+    {
+      history,
+      response,
+      stlBlobUrl,
+      userPrompt,
+      codeGenerated
+    }
+  ])
+
   setHistory(last.history)
   setResponse(last.response)
   setStlBlobUrl(last.stlBlobUrl)
   setUserPrompt(last.userPrompt)
   setCodeGenerated(last.codeGenerated)
+}
+
+const handleRedo = () => {
+  if (futureStates.length === 0) return
+
+  const next = futureStates[futureStates.length - 1]
+  setFutureStates(future => future.slice(0, -1))
+
+  setPastStates(prev => [
+    ...prev,
+    {
+      history,
+      response,
+      stlBlobUrl,
+      userPrompt,
+      codeGenerated
+    }
+  ])
+
+  setHistory(next.history)
+  setResponse(next.response)
+  setStlBlobUrl(next.stlBlobUrl)
+  setUserPrompt(next.userPrompt)
+  setCodeGenerated(next.codeGenerated)
 }
 
 
@@ -377,6 +415,13 @@ const handleUpdateProject = async () => {
   Undo
 </button>
 
+<button
+  onClick={handleRedo}
+  disabled={futureStates.length === 0}
+  className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+>
+  Redo
+</button>
 
   {currentProjectId ? (
     <button
