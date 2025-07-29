@@ -19,6 +19,7 @@ export default function DashboardPage() {
   const [resolution, setResolution] = useState(100)
   const [darkMode, setDarkMode] = useState(false)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
+  const [pastStates, setPastStates] = useState<any[]>([])
 
   const router = useRouter()
 
@@ -63,6 +64,31 @@ export default function DashboardPage() {
     )
     return codeLines.join('\n').trim()
   }
+
+  setPastStates(prev => [
+  ...prev,
+  {
+    history,
+    response,
+    stlBlobUrl,
+    userPrompt,
+    codeGenerated
+  }
+])
+
+const handleUndo = () => {
+  if (pastStates.length === 0) return
+
+  const last = pastStates[pastStates.length - 1]
+  setPastStates(prev => prev.slice(0, -1))
+
+  setHistory(last.history)
+  setResponse(last.response)
+  setStlBlobUrl(last.stlBlobUrl)
+  setUserPrompt(last.userPrompt)
+  setCodeGenerated(last.codeGenerated)
+}
+
 
   const handleSubmit = async () => {
   if (!userPrompt) return
@@ -335,6 +361,15 @@ const handleUpdateProject = async () => {
   >
     {loading ? 'Generating...' : 'Send'}
   </button>
+
+  <button
+  onClick={handleUndo}
+  disabled={pastStates.length === 0}
+  className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded disabled:opacity-50"
+>
+  Undo
+</button>
+
 
   {currentProjectId ? (
     <button
