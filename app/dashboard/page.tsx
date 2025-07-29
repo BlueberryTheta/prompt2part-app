@@ -49,25 +49,6 @@ export default function DashboardPage() {
     fetchData()
   }, [router])
 
-useEffect(() => {
-  // Don't record empty state on initial mount
-  if (!userPrompt && !response && !history.length && !stlBlobUrl) return;
-
-  setPastStates(prev => [
-    ...prev,
-    {
-      history,
-      response,
-      stlBlobUrl,
-      userPrompt,
-      codeGenerated
-    }
-  ]);
-  setFutureStates([]) // clear redo stack on new action
-// Add only the dependencies you want to trigger an undo snapshot
-}, [response, userPrompt, stlBlobUrl, history, codeGenerated]);
-
-
   const extractOpenSCAD = (input: string): string => {
     const match = input.match(/```(?:scad|openscad)?\n([\s\S]*?)```/)
     if (match) return match[1].trim()
@@ -138,6 +119,19 @@ const handleRedo = () => {
   const handleSubmit = async () => {
   if (!userPrompt) return
   setLoading(true)
+
+    // Save model state *before* submitting new prompt
+  setPastStates(prev => [
+    ...prev,
+    {
+      history,
+      response,
+      stlBlobUrl,
+      userPrompt,
+      codeGenerated
+    }
+  ])
+  setFutureStates([]) // Clear redo stack
 
   const newHistory = [...history, { role: 'user', content: userPrompt }]
 
