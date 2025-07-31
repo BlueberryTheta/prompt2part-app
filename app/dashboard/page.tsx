@@ -192,6 +192,8 @@ const handleRedo = async () => {
   }
 };
 
+
+
 useEffect(() => {
   const el = chatContainerRef.current
   if (!el) return
@@ -225,7 +227,7 @@ useEffect(() => {
 }, [handleUndo, handleRedo])
 
 // Strong guided prompt
-function buildGuidedPrompt(currentCode: string, userInstruction: string) {
+function buildGuidedPrompt(currentCode: string, userInstruction: string, res: number) {
   return [
     "You are an expert OpenSCAD assistant. Modify the existing model as requested.",
     "",
@@ -337,11 +339,14 @@ async function renderWithSelfHeal(
   const newHistory = [...history, { role: 'user', content: userPrompt }];
 
   try {
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: userPrompt, history: newHistory }),
-    });
+    const guidedPrompt = buildGuidedPrompt(userPrompt, response, resolution);
+
+const res = await fetch('/api/generate', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  // 👇 send the guided prompt instead of the raw user text
+  body: JSON.stringify({ prompt: guidedPrompt, history: newHistory }),
+});
 
     const data = await res.json();
     const aiText = data?.code ?? data?.question ?? data?.content ?? '';
