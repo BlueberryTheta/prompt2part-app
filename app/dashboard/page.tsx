@@ -137,55 +137,256 @@ useEffect(() => {
   return () => window.removeEventListener('keydown', handleKeyDown)
 }, [handleUndo, handleRedo])
 
-  const handleSubmit = async () => {
-  if (!userPrompt) return
-  setLoading(true)
+// ---- 1) Build a strongly-guided prompt for /api/generate
+function buildGuidedPrompt(currentCode: string, userInstruction: string) {
+  return [
+    "You are an expert OpenSCAD assistant. Your task is to MODIFY the existing model as requested.",
+    "",
+    "### RULES",
+    "- Always preserve existing features unless the user asks to remove them.",
+    "- If the model has holes/fasteners, DO NOT remove them unless asked.",
+    "- If adding fillets/rounds, subtract holes AFTER filleting so they remain.",
+    "- Keep units consistent with the existing code.",
+    "- Return **only** one fenced OpenSCAD code block and a short natural-language message.",
+    "- Do NOT wrap the message or code in JSON.",
+    "",
+    "### CURRENT_OPENSCAD",
+    "```openscad",
+    currentCode || "// (no prior code) put your full OpenSCAD model here",
+    "```",
+    "",
+    "### USER_REQUEST",
+    userInstruction,
+    "",
+    "### OUTPUT FORMAT",
+    "Message:",
+    "- A short one-paragraph explanation of what changed and why.",
+    "",
+    "Code:",
+    "```openscad",
+    "// complete, compilable OpenSCAD code here",
+    "```",
+  ].join("\n");
+}
 
-    // Save model state *before* submitting new prompt
-  setPastStates(prev => [
-    ...prev,
-    {
-      history,
-      response,
-      stlBlobUrl,
-      userPrompt,
-      codeGenerated
-    }
-  ])
-  setFutureStates([]) // Clear redo stack
+// ---- 2) Parse AI response into { message, code }
+//    - Pull the first fenced code block as OpenSCAD
+//    - Pull any non-code text above it as a message
+function parseAIResponse(raw: string): { message: string; code: string } {
+  const codeMatch = raw.match(/```(?:scad|openscad)?\n([\s\S]*?)```/i);
+  const code = codeMatch ? codeMatch[1].trim() : "";
 
-  const newHistory = [...history, { role: 'user', content: userPrompt }]
-
-  try {
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: userPrompt, history: newHistory }),
-    })
-
-    const data = await res.json()
-    const aiContent = data?.code ?? data?.question ?? ''
-    const code = extractOpenSCAD(aiContent)
-
-    if (code) {
-      // Add to render only, don't show in chat
-      setResponse(code)
-      setCodeGenerated(true)
-      renderStlFromCode(code)
-    } else {
-      // No valid code → show AI message in chat
-      newHistory.push({ role: 'assistant', content: aiContent })
-    }
-
-    setHistory(newHistory)
-    setUserPrompt('')
-  } catch (error) {
-    console.error('Error:', error)
-    setResponse('❌ Something went wrong. Please try again.')
-    setStlBlobUrl(null)
-  } finally {
-    setLoading(false)
+  // Message = raw without the code fence (best-effort)
+  let message = raw;
+  if (codeMatch) {
+    message = raw.replace(codeMatch[0], "").trim();
   }
+  // If message is empty and we only got code, set a default
+  if (!message) message = "Model updated based on your request.";
+
+  return { message, code };
+}
+
+// ---- 3) A render helper with one self-heal retry using the compiler error
+async function renderWithSelfHeal(
+  code: string,
+  resolution: number,
+  callGenerate: (prompt: string) => Promise<string> // a function we pass in to call /api/generate
+): Promise<{ ok: boolean; blobUrl?: string; message?: string; fixedCode?: string }> {
+  // try once
+  try {
+    const url = await renderStlFromCodeStrict(code, resolution);
+    return { ok: true, blobUrl: url, fixedCode: code };
+  } catch (e: any) {
+    const firstError = String(e?.message || e);
+    // ask the AI to fix the code using the compiler error
+    const repairPrompt = [
+      "Fix the following OpenSCAD code so it compiles successfully. Keep the intent unchanged.",
+      "",
+      "### COMPILER_ERROR",
+      firstError,
+      "",
+      "### BROKEN_CODE",
+      "```openscad",
+      code,
+      "```",
+      "",
+      "### OUTPUT",
+      "Return only one fenced OpenSCAD code block and a short explanation of the fix."
+    ].join("\n");
+
+    const repairRaw = await callGenerate(repairPrompt);
+    const { message: repairMsg, code: repairedCode } = parseAIResponse(repairRaw);
+    if (!repairedCode) {
+      return { ok: false, message: "Automatic repair failed: no code returned." };
+    }
+
+    try {
+      const url2 = await renderStlFromCodeStrict(repairedCode, resolution);
+      return { ok: true, blobUrl: url2, message: repairMsg, fixedCode: repairedCode };
+    } catch (e2: any) {
+      return {
+        ok: false,
+        message: "Automatic repair failed with another compile error. Please try rephrasing your request.\n\n" + String(e2?.message || e2),
+      };
+    }
+  }
+}
+
+// ---- 4) A stricter renderer function that throws with backend errors
+async function renderStlFromCodeStrict(code: string, resolution: number): Promise<string> {
+  const formData = new FormData();
+  formData.append("code", `$fn = ${resolution};\n` + code);
+
+  const backendRes = await fetch("https://scad-backend-production.up.railway.app/render", {
+    method: "POST",
+    body: formData,
+  });
+
+  const cloneText = await backendRes.clone().text(); // For diagnostics
+  if (!backendRes.ok) {
+    throw new Error(`Backend render error ${backendRes.status}: ${cloneText}`);
+  }
+
+  // If backend gave JSON, it's likely an error payload
+  const ct = backendRes.headers.get("Content-Type") || "";
+  if (ct.includes("application/json")) {
+    throw new Error(`Backend returned JSON instead of STL: ${cloneText}`);
+  }
+
+  const blob = await backendRes.blob();
+  if (!blob || blob.size === 0) {
+    throw new Error("Empty STL blob received.");
+  }
+
+  return URL.createObjectURL(blob);
+}
+
+  const handleSubmit = async () => {
+  // ---- 1) Build a strongly-guided prompt for /api/generate
+function buildGuidedPrompt(currentCode: string, userInstruction: string) {
+  return [
+    "You are an expert OpenSCAD assistant. Your task is to MODIFY the existing model as requested.",
+    "",
+    "### RULES",
+    "- Always preserve existing features unless the user asks to remove them.",
+    "- If the model has holes/fasteners, DO NOT remove them unless asked.",
+    "- If adding fillets/rounds, subtract holes AFTER filleting so they remain.",
+    "- Keep units consistent with the existing code.",
+    "- Return **only** one fenced OpenSCAD code block and a short natural-language message.",
+    "- Do NOT wrap the message or code in JSON.",
+    "",
+    "### CURRENT_OPENSCAD",
+    "```openscad",
+    currentCode || "// (no prior code) put your full OpenSCAD model here",
+    "```",
+    "",
+    "### USER_REQUEST",
+    userInstruction,
+    "",
+    "### OUTPUT FORMAT",
+    "Message:",
+    "- A short one-paragraph explanation of what changed and why.",
+    "",
+    "Code:",
+    "```openscad",
+    "// complete, compilable OpenSCAD code here",
+    "```",
+  ].join("\n");
+}
+
+// ---- 2) Parse AI response into { message, code }
+//    - Pull the first fenced code block as OpenSCAD
+//    - Pull any non-code text above it as a message
+function parseAIResponse(raw: string): { message: string; code: string } {
+  const codeMatch = raw.match(/```(?:scad|openscad)?\n([\s\S]*?)```/i);
+  const code = codeMatch ? codeMatch[1].trim() : "";
+
+  // Message = raw without the code fence (best-effort)
+  let message = raw;
+  if (codeMatch) {
+    message = raw.replace(codeMatch[0], "").trim();
+  }
+  // If message is empty and we only got code, set a default
+  if (!message) message = "Model updated based on your request.";
+
+  return { message, code };
+}
+
+// ---- 3) A render helper with one self-heal retry using the compiler error
+async function renderWithSelfHeal(
+  code: string,
+  resolution: number,
+  callGenerate: (prompt: string) => Promise<string> // a function we pass in to call /api/generate
+): Promise<{ ok: boolean; blobUrl?: string; message?: string; fixedCode?: string }> {
+  // try once
+  try {
+    const url = await renderStlFromCodeStrict(code, resolution);
+    return { ok: true, blobUrl: url, fixedCode: code };
+  } catch (e: any) {
+    const firstError = String(e?.message || e);
+    // ask the AI to fix the code using the compiler error
+    const repairPrompt = [
+      "Fix the following OpenSCAD code so it compiles successfully. Keep the intent unchanged.",
+      "",
+      "### COMPILER_ERROR",
+      firstError,
+      "",
+      "### BROKEN_CODE",
+      "```openscad",
+      code,
+      "```",
+      "",
+      "### OUTPUT",
+      "Return only one fenced OpenSCAD code block and a short explanation of the fix."
+    ].join("\n");
+
+    const repairRaw = await callGenerate(repairPrompt);
+    const { message: repairMsg, code: repairedCode } = parseAIResponse(repairRaw);
+    if (!repairedCode) {
+      return { ok: false, message: "Automatic repair failed: no code returned." };
+    }
+
+    try {
+      const url2 = await renderStlFromCodeStrict(repairedCode, resolution);
+      return { ok: true, blobUrl: url2, message: repairMsg, fixedCode: repairedCode };
+    } catch (e2: any) {
+      return {
+        ok: false,
+        message: "Automatic repair failed with another compile error. Please try rephrasing your request.\n\n" + String(e2?.message || e2),
+      };
+    }
+  }
+}
+
+// ---- 4) A stricter renderer function that throws with backend errors
+async function renderStlFromCodeStrict(code: string, resolution: number): Promise<string> {
+  const formData = new FormData();
+  formData.append("code", `$fn = ${resolution};\n` + code);
+
+  const backendRes = await fetch("https://scad-backend-production.up.railway.app/render", {
+    method: "POST",
+    body: formData,
+  });
+
+  const cloneText = await backendRes.clone().text(); // For diagnostics
+  if (!backendRes.ok) {
+    throw new Error(`Backend render error ${backendRes.status}: ${cloneText}`);
+  }
+
+  // If backend gave JSON, it's likely an error payload
+  const ct = backendRes.headers.get("Content-Type") || "";
+  if (ct.includes("application/json")) {
+    throw new Error(`Backend returned JSON instead of STL: ${cloneText}`);
+  }
+
+  const blob = await backendRes.blob();
+  if (!blob || blob.size === 0) {
+    throw new Error("Empty STL blob received.");
+  }
+
+  return URL.createObjectURL(blob);
+}
 }
 
   const renderStlFromCode = async (code: string) => {
