@@ -20,12 +20,43 @@ export default function DashboardPage() {
   const [resolution, setResolution] = useState(100)
   const [darkMode, setDarkMode] = useState(false)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
-  const [pastStates, setPastStates] = useState<any[]>([])
-  const [futureStates, setFutureStates] = useState<any[]>([])
+
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
 
-
   const router = useRouter()
+
+  // 👇 Add this type (optional if you’re in JS, helpful in TS)
+type ModelSnapshot = {
+  history: { role: string; content: string }[];
+  response: string;
+  stlBlobUrl: string | null;
+  userPrompt: string;
+  codeGenerated: boolean;
+  currentProjectId: string | null;
+  resolution: number;
+};
+
+const [pastStates, setPastStates] = useState<ModelSnapshot[]>([]);
+const [futureStates, setFutureStates] = useState<ModelSnapshot[]>([]);
+
+// Take a snapshot of the CURRENT model/chat before you apply a new change.
+// This makes "Undo" go back to this captured state.
+function takeSnapshot() {
+  setPastStates(prev => [
+    ...prev,
+    {
+      history,
+      response,
+      stlBlobUrl,
+      userPrompt,
+      codeGenerated,
+      currentProjectId,
+      resolution,
+    },
+  ]);
+  // any new action invalidates redo stack
+  setFutureStates([]);
+}
 
   useEffect(() => {
     const fetchData = async () => {
@@ -71,39 +102,95 @@ export default function DashboardPage() {
     return codeLines.join('\n').trim()
   }
 
-const handleUndo = useCallback(() => {
-  if (pastStates.length === 0) return
-  const last = pastStates[pastStates.length - 1]
+// Undo to previous snapshot (and push current to Redo stack)
+const handleUndo = async () => {
+  if (pastStates.length === 0) return;
 
-  setPastStates(prev => prev.slice(0, -1))
-  setFutureStates(future => [
-    ...future,
-    { history, response, stlBlobUrl, userPrompt, codeGenerated }
-  ])
+  // Move current → future (for redo)
+  setFutureStates(prev => [
+    ...prev,
+    {
+      history,
+      response,
+      stlBlobUrl,
+      userPrompt,
+      codeGenerated,
+      currentProjectId,
+      resolution,
+    },
+  ]);
 
-  setHistory(last.history)
-  setResponse(last.response)
-  setStlBlobUrl(last.stlBlobUrl)
-  setUserPrompt(last.userPrompt)
-  setCodeGenerated(last.codeGenerated)
-}, [pastStates, history, response, stlBlobUrl, userPrompt, codeGenerated])
+  // Pop last from past
+  const prevStack = [...pastStates];
+  const snapshot = prevStack.pop()!;
+  setPastStates(prevStack);
 
-const handleRedo = useCallback(() => {
-  if (futureStates.length === 0) return
-  const next = futureStates[futureStates.length - 1]
+  // Restore snapshot
+  setHistory(snapshot.history);
+  setResponse(snapshot.response);
+  setUserPrompt(snapshot.userPrompt);
+  setCodeGenerated(snapshot.codeGenerated);
+  setCurrentProjectId(snapshot.currentProjectId);
+  setResolution(snapshot.resolution);
 
-  setFutureStates(future => future.slice(0, -1))
+  // Re-render STL for that snapshot
+  if (snapshot.response) {
+    try {
+      const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution);
+      setStlBlobUrl(url);
+    } catch (e) {
+      console.error('Undo render error:', e);
+      setStlBlobUrl(null);
+    }
+  } else {
+    setStlBlobUrl(null);
+  }
+};
+
+// Redo to next snapshot (and push current to Undo stack)
+const handleRedo = async () => {
+  if (futureStates.length === 0) return;
+
+  // Move current → past (so we can undo the redo)
   setPastStates(prev => [
     ...prev,
-    { history, response, stlBlobUrl, userPrompt, codeGenerated }
-  ])
+    {
+      history,
+      response,
+      stlBlobUrl,
+      userPrompt,
+      codeGenerated,
+      currentProjectId,
+      resolution,
+    },
+  ]);
 
-  setHistory(next.history)
-  setResponse(next.response)
-  setStlBlobUrl(next.stlBlobUrl)
-  setUserPrompt(next.userPrompt)
-  setCodeGenerated(next.codeGenerated)
-}, [futureStates, history, response, stlBlobUrl, userPrompt, codeGenerated])
+  // Pop from future
+  const nextStack = [...futureStates];
+  const snapshot = nextStack.pop()!;
+  setFutureStates(nextStack);
+
+  // Restore snapshot
+  setHistory(snapshot.history);
+  setResponse(snapshot.response);
+  setUserPrompt(snapshot.userPrompt);
+  setCodeGenerated(snapshot.codeGenerated);
+  setCurrentProjectId(snapshot.currentProjectId);
+  setResolution(snapshot.resolution);
+
+  // Re-render STL for that snapshot
+  if (snapshot.response) {
+    try {
+      const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution);
+      setStlBlobUrl(url);
+    } catch (e) {
+      console.error('Redo render error:', e);
+      setStlBlobUrl(null);
+    }
+  } else {
+    setStlBlobUrl(null);
+  }
+};
 
 useEffect(() => {
   const el = chatContainerRef.current
@@ -244,64 +331,51 @@ async function renderWithSelfHeal(
 }
 
   const handleSubmit = async () => {
-  console.log("▶ handleSubmit clicked"); // quick sanity log
   if (!userPrompt) return;
-
   setLoading(true);
 
-  // Snapshot chat before adding assistant message
-  const newHistory = [...history, { role: "user", content: userPrompt }];
-
-  // Helper to call your /api/generate
-  const callGenerate = async (prompt: string) => {
-    const res = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, history: newHistory }),
-    });
-    const data = await res.json();
-    // combine content + code/question into one raw text for parsing
-    const combined = [data?.content, data?.code || data?.question].filter(Boolean).join("\n\n");
-    return combined || "";
-  };
+  const newHistory = [...history, { role: 'user', content: userPrompt }];
 
   try {
-    // Build the guided request with the current OpenSCAD
-    const guided = buildGuidedPrompt(response, userPrompt);
-    const raw = await callGenerate(guided);
-    const { message, code } = parseAIResponse(raw);
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: userPrompt, history: newHistory }),
+    });
 
-    // If the model returned no code, show the message only
+    const data = await res.json();
+    const aiText = data?.code ?? data?.question ?? data?.content ?? '';
+    const code = extractOpenSCAD(aiText);
+
     if (!code) {
-      setHistory([...newHistory, { role: "assistant", content: message || "I didn't receive valid code this time." }]);
-      setUserPrompt("");
+      // show assistant message if we didn’t get code
+      setHistory([...newHistory, { role: 'assistant', content: aiText || 'I didn’t receive valid code.' }]);
+      setUserPrompt('');
       return;
     }
 
-    // Try rendering (with one repair pass)
-    const result = await renderWithSelfHeal(code, resolution, callGenerate);
+    // 🔴 Snapshot *before* applying the new model so Undo goes back to current state
+    takeSnapshot();
 
-    if (result.ok) {
-      setResponse(result.fixedCode || code);
-      setCodeGenerated(true);
-      setStlBlobUrl(result.blobUrl || null);
-      const explain = result.message || message || "Model updated.";
-      setHistory([...newHistory, { role: "assistant", content: explain }]);
-    } else {
-      setHistory([...newHistory, { role: "assistant", content: result.message || "I couldn't produce a valid model. Please try again." }]);
-      setStlBlobUrl(null);
-    }
+    // Render STL
+    const url = await renderStlFromCodeStrict(code, resolution);
 
-    setUserPrompt("");
-  } catch (err) {
-    console.error("❌ handleSubmit error:", err);
-    setHistory([...newHistory, { role: "assistant", content: "❌ Something went wrong while generating or rendering the model." }]);
+    // Apply new model
+    setResponse(code);
+    setCodeGenerated(true);
+    setStlBlobUrl(url);
+
+    // Show assistant message (short success message)
+    setHistory([...newHistory, { role: 'assistant', content: '✅ Model generated successfully.' }]);
+    setUserPrompt('');
+  } catch (error) {
+    console.error('Error:', error);
+    setHistory(prev => [...prev, { role: 'assistant', content: '❌ Something went wrong. Please try again.' }]);
     setStlBlobUrl(null);
   } finally {
     setLoading(false);
   }
 };
-
 
   const renderStlFromCode = async (code: string) => {
   try {
@@ -362,41 +436,26 @@ async function renderWithSelfHeal(
   }
 
   const handleLoadProject = async (projectId: string) => {
-  const project = projects.find(p => p.id === projectId)
-  if (!project) return
+  const project = projects.find(p => p.id === projectId);
+  if (!project) return;
 
-  setUserPrompt(project.prompt)
-  setResponse(project.response)
-  setCodeGenerated(true)
-  setHistory(project.history ?? [])
-  setCurrentProjectId(projectId)
-  setCurrentProjectId(projectId)
-  renderStlFromCode(project.response)
+  // Snapshot current state BEFORE loading a new one
+  takeSnapshot();
+
+  setCurrentProjectId(projectId);
+  setUserPrompt(project.prompt);
+  setResponse(project.response);
+  setCodeGenerated(true);
+  setHistory(project.history ?? []);
 
   try {
-    const formData = new FormData()
-    formData.append('code', `$fn = ${resolution};\n` + project.response)
-
-    const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
-      method: 'POST',
-      body: formData,
-    })
-
-    const debugText = await backendRes.clone().text()
-    console.log('Backend response (load):', debugText)
-
-    if (!backendRes.ok) throw new Error(`Failed to render STL: ${backendRes.statusText}`)
-
-    const blob = await backendRes.blob()
-    if (blob.size === 0) throw new Error('The STL file is empty.')
-
-    const url = URL.createObjectURL(blob)
-    setStlBlobUrl(url)
-  } catch (error) {
-    console.error('Error rendering saved project:', error)
-    setStlBlobUrl(null)
+    const url = await renderStlFromCodeStrict(project.response, resolution);
+    setStlBlobUrl(url);
+  } catch (e) {
+    console.error('Error rendering saved project:', e);
+    setStlBlobUrl(null);
   }
-}
+};
 
 const handleUpdateProject = async () => {
   if (!currentProjectId) return
