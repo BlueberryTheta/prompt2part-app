@@ -192,8 +192,6 @@ const handleRedo = async () => {
   }
 };
 
-
-
 useEffect(() => {
   const el = chatContainerRef.current
   if (!el) return
@@ -229,7 +227,7 @@ useEffect(() => {
 // Strong guided prompt
 function buildGuidedPrompt(currentCode: string, userInstruction: string, res: number) {
   return [
-    "You are an expert OpenSCAD assistant. Modify the existing model as requested.",
+    "You are an expert OpenSCAD assistant. Build a new model or modify the existing model as requested.",
     "",
     "### RULES",
     "- Preserve existing features unless explicitly asked to remove them.",
@@ -336,46 +334,57 @@ async function renderWithSelfHeal(
   if (!userPrompt) return;
   setLoading(true);
 
-  const newHistory = [...history, { role: 'user', content: userPrompt }];
+  // add the user's message to the pending history
+  const baseHistory = [...history, { role: 'user', content: userPrompt }];
 
   try {
+    // Build a guided prompt that includes the current code
     const guidedPrompt = buildGuidedPrompt(userPrompt, response, resolution);
 
-const res = await fetch('/api/generate', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  // 👇 send the guided prompt instead of the raw user text
-  body: JSON.stringify({ prompt: guidedPrompt, history: newHistory }),
-});
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: guidedPrompt,
+        history: baseHistory,
+      }),
+    });
 
     const data = await res.json();
     const aiText = data?.code ?? data?.question ?? data?.content ?? '';
+
+    // Try to pull OpenSCAD code out of the response
     const code = extractOpenSCAD(aiText);
 
-    if (!code) {
-      // show assistant message if we didn’t get code
-      setHistory([...newHistory, { role: 'assistant', content: aiText || 'I didn’t receive valid code.' }]);
-      setUserPrompt('');
-      return;
+    if (code && code.trim().length > 0) {
+      // We got code -> update model, render STL, and add a short status line
+      setResponse(code);
+      setCodeGenerated(true);
+
+      // Keep your existing renderer
+      await renderStlFromCode(code);
+
+      // Show a brief status message (no code) so the user knows something changed
+      setHistory([
+        ...baseHistory,
+        { role: 'assistant', content: '✅ Updated the model.' },
+      ]);
+    } else {
+      // No code -> show the AI message as regular chat
+      const msg = (aiText || '').toString().trim();
+      setHistory([
+        ...baseHistory,
+        { role: 'assistant', content: msg || '✉️ (No response text)' },
+      ]);
     }
 
-    // 🔴 Snapshot *before* applying the new model so Undo goes back to current state
-    takeSnapshot();
-
-    // Render STL
-    const url = await renderStlFromCodeStrict(code, resolution);
-
-    // Apply new model
-    setResponse(code);
-    setCodeGenerated(true);
-    setStlBlobUrl(url);
-
-    // Show assistant message (short success message)
-    setHistory([...newHistory, { role: 'assistant', content: '✅ Model generated successfully.' }]);
     setUserPrompt('');
-  } catch (error) {
-    console.error('Error:', error);
-    setHistory(prev => [...prev, { role: 'assistant', content: '❌ Something went wrong. Please try again.' }]);
+  } catch (err) {
+    console.error('Error:', err);
+    setHistory([
+      ...baseHistory,
+      { role: 'assistant', content: '❌ Something went wrong. Please try again.' },
+    ]);
     setStlBlobUrl(null);
   } finally {
     setLoading(false);
