@@ -1,10 +1,11 @@
 
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import PartViewer from '../components/PartViewer'
+
 
 export default function DashboardPage() {
   const [userPrompt, setUserPrompt] = useState('')
@@ -21,6 +22,7 @@ export default function DashboardPage() {
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
   const [pastStates, setPastStates] = useState<any[]>([])
   const [futureStates, setFutureStates] = useState<any[]>([])
+  const chatContainerRef = useRef<HTMLDivElement | null>(null)
 
 
   const router = useRouter()
@@ -102,6 +104,16 @@ const handleRedo = useCallback(() => {
   setUserPrompt(next.userPrompt)
   setCodeGenerated(next.codeGenerated)
 }, [futureStates, history, response, stlBlobUrl, userPrompt, codeGenerated])
+
+useEffect(() => {
+  const el = chatContainerRef.current
+  if (!el) return
+  // Jump to bottom (fast and reliable)
+  el.scrollTop = el.scrollHeight
+  // If you prefer animated scrolling, use:
+  // el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+}, [history])
+
 
 useEffect(() => {
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -378,7 +390,9 @@ const handleUpdateProject = async () => {
         )}
       </div>
 
-      <div className="max-h-64 overflow-y-auto space-y-2 border border-gray-300 dark:border-gray-600 p-2 rounded bg-gray-50 dark:bg-gray-700">
+      <div 
+      ref={chatContainerRef}
+      className="max-h-64 overflow-y-auto space-y-2 border border-gray-300 dark:border-gray-600 p-2 rounded bg-gray-50 dark:bg-gray-700">
   {history.map((msg, i) => (
     <div
       key={i}
