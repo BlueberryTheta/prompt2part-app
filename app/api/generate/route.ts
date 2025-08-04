@@ -1,21 +1,20 @@
-// app/api/generate/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
-const OPENAI_MODEL = 'gpt-4o' // or 'gpt-4o-mini' to save cost
+const OPENAI_MODEL = 'gpt-4o'
 
-type Msg = { role: 'system'|'user'|'assistant'; content: string }
+type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
 type Spec = {
-  units?: 'mm'|'inch'
-  part_type?: 'bracket'|'plate'|'box'|'knob'|'custom'
-  overall?: { x?: number; y?: number; z?: number } // width/height/thickness in units
+  units?: 'mm' | 'inch'
+  part_type?: string
+  overall?: { x?: number; y?: number; z?: number }
   features?: Array<
-    | { type: 'hole'; diameter?: number; count?: number; pattern?: 'grid'|'linear'|'custom'; positions?: Array<{ x:number; y:number }>; through?: boolean; countersink?: boolean; }
-    | { type: 'slot'; width?: number; length?: number; center?: {x:number;y:number}; angle?: number }
-    | { type: 'fillet'; radius?: number; edges?: 'all'|'none'|'some' }
-    | { type: 'chamfer'; size?: number; edges?: 'all'|'none'|'some' }
+    | { type: 'hole'; diameter?: number; count?: number; pattern?: string; positions?: Array<{ x: number; y: number }>; through?: boolean; countersink?: boolean }
+    | { type: 'slot'; width?: number; length?: number; center?: { x: number; y: number }; angle?: number }
+    | { type: 'fillet'; radius?: number; edges?: string }
+    | { type: 'chamfer'; size?: number; edges?: string }
   >
-  mounting?: { surface?: 'wall'|'table'|'rail'|'custom'; holes?: number }
+  mounting?: { surface?: string; holes?: number }
   tolerances?: { general?: number; hole_clearance?: number }
   notes?: string
 }
@@ -34,18 +33,13 @@ Output STRICTLY this JSON with keys:
   "missing": string[],
   "questions": string[]
 }
-
-Rules:
-- If the user asks for holes, you MUST require: hole diameter, hole count, and either positions OR a pattern + spacing. Also whether through or countersink.
-- If the user asks for a bracket/plate, require overall.x/y/z (mm).
-- Do NOT invent values. If unknown, list in "missing" and add a pointed question in "questions".
-- Keep spec concise and cumulative.
-`
+`.trim()
 }
 
 function sysPromptCode(): string {
   return `
 You are an OpenSCAD generator. Produce only valid OpenSCAD for the SPEC given.
+
 Rules:
 - Use millimeters if units == "mm".
 - Include concise comments describing parameters and steps.
@@ -53,7 +47,7 @@ Rules:
 - Use named variables for key dims at the top.
 - If features include holes: ensure positions are respected and diameters are correct; use translate() + cylinder() and difference().
 - Code should be complete & renderable.
-`
+`.trim()
 }
 
 export async function POST(req: NextRequest) {
@@ -61,12 +55,9 @@ export async function POST(req: NextRequest) {
     const { prompt, history = [], spec: currentSpec }: { prompt: string; history?: Msg[]; spec?: Spec } =
       await req.json()
 
-    // ---------------------------
-    // Stage A: SPEC extraction
-    // ---------------------------
     const messagesA: Msg[] = [
       { role: 'system', content: sysPromptSpec() },
-      ...(history as Msg[]),
+      ...(history || []),
       { role: 'user', content: `User says: ${prompt}\n\nExisting spec (if any): ${JSON.stringify(currentSpec || {})}` },
     ]
 
@@ -85,19 +76,18 @@ export async function POST(req: NextRequest) {
     })
 
     const dataA = await resA.json()
-    const contentA = dataA?.choices?.[0]?.message?.content || '{}'
+    const contentA = dataA?.choices?.[0]?.message?.content ?? '{}'
 
-    // Parse structured JSON
     let jsonA: { spec?: Spec; missing?: string[]; questions?: string[] } = {}
+
     try {
       jsonA = JSON.parse(contentA)
-    } catch (e) {
-      // fallback: try to recover JSON block
-      const m = contentA.match(/\{[\s\S]*\}$/)
-      if (m) {
-        jsonA = JSON.parse(m[0])
+    } catch {
+      const fallbackMatch = contentA.match(/\{[\s\S]*?\}/)
+      if (fallbackMatch) {
+        jsonA = JSON.parse(fallbackMatch[0])
       } else {
-        throw new Error('Spec-extractor returned non-JSON.')
+        throw new Error('Spec-extractor returned invalid JSON.')
       }
     }
 
@@ -106,13 +96,11 @@ export async function POST(req: NextRequest) {
     const questions: string[] = jsonA.questions || []
 
     if (missing.length > 0 || questions.length > 0) {
-      // Still gathering requirements — return questions to the UI
       return NextResponse.json({
         type: 'questions',
         spec: updatedSpec,
         missing,
         questions,
-        // Also provide a short assistant message to display
         content:
           questions.length > 0
             ? `Before I can generate the model, I need:\n- ${missing.join('\n- ')}\n\nQuestions:\n- ${questions.join('\n- ')}`
@@ -120,9 +108,7 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // ---------------------------
-    // Stage B: CODE generation (only when nothing is missing)
-    // ---------------------------
+    // Stage B – Code generation
     const messagesB: Msg[] = [
       { role: 'system', content: sysPromptCode() },
       { role: 'user', content: `SPEC:\n${JSON.stringify(updatedSpec, null, 2)}` },
@@ -143,10 +129,9 @@ export async function POST(req: NextRequest) {
     })
 
     const dataB = await resB.json()
-    const code = dataB?.choices?.[0]?.message?.content || ''
+    const code = dataB?.choices?.[0]?.message?.content ?? ''
 
-    // Defensive check: make sure it looks like OpenSCAD
-    const isLikelySCAD = /module|cube|cylinder|translate|difference|union|rotate|linear_extrude/i.test(code)
+    const isLikelySCAD = /cube|cylinder|translate|difference|module|linear_extrude/i.test(code)
 
     return NextResponse.json({
       type: isLikelySCAD ? 'code' : 'questions',
@@ -157,7 +142,7 @@ export async function POST(req: NextRequest) {
         : 'The information is still incomplete; please answer the pending questions.',
     })
   } catch (err: any) {
-    console.error('generate error', err)
-    return NextResponse.json({ error: err?.message || 'Failed to generate' }, { status: 500 })
+    console.error('🛑 /api/generate error:', err)
+    return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 })
   }
 }
