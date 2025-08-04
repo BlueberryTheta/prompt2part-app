@@ -5,10 +5,12 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import PartViewer from '../components/PartViewer'
 
+type ChatMsg = { role: 'user' | 'assistant'; content: string }
+
 export default function DashboardPage() {
   const [userPrompt, setUserPrompt] = useState('')
-  const [history, setHistory] = useState<{ role: string; content: string }[]>([])
-  const [response, setResponse] = useState('')
+  const [history, setHistory] = useState<ChatMsg[]>([])
+  const [response, setResponse] = useState('')                    // OpenSCAD code (when present)
   const [codeGenerated, setCodeGenerated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
@@ -22,9 +24,9 @@ export default function DashboardPage() {
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const router = useRouter()
 
-  // --- Snapshot types & stacks for Undo/Redo ---
+  // === Undo / Redo ===
   type ModelSnapshot = {
-    history: { role: string; content: string }[]
+    history: ChatMsg[]
     response: string
     stlBlobUrl: string | null
     userPrompt: string
@@ -32,10 +34,8 @@ export default function DashboardPage() {
     currentProjectId: string | null
     resolution: number
   }
-
   const [pastStates, setPastStates] = useState<ModelSnapshot[]>([])
   const [futureStates, setFutureStates] = useState<ModelSnapshot[]>([])
-
   function takeSnapshot() {
     setPastStates(prev => [
       ...prev,
@@ -49,11 +49,14 @@ export default function DashboardPage() {
         resolution,
       },
     ])
-    // invalidate redo on new action
     setFutureStates([])
   }
 
-  // --- Session & projects load ---
+  // === Config ===
+  const RENDER_URL =
+    process.env.NEXT_PUBLIC_RENDER_URL || 'http://localhost:8000/render'
+
+  // === Session + projects ===
   useEffect(() => {
     const fetchData = async () => {
       const { data: { session }, error } = await supabase.auth.getSession()
@@ -61,7 +64,6 @@ export default function DashboardPage() {
         router.push('/login')
         return
       }
-
       setUserEmail(session.user.email ?? null)
 
       const { data, error: projectError } = await supabase
@@ -70,33 +72,12 @@ export default function DashboardPage() {
         .eq('user_id', session.user.id)
         .order('created_at', { ascending: false })
 
-      if (!projectError) {
-        setProjects(data ?? [])
-      }
+      if (!projectError) setProjects(data ?? [])
     }
-
     fetchData()
   }, [router])
 
-  // --- Helpers ---
-  const extractOpenSCAD = (input: string): string => {
-    const match = input.match(/```(?:scad|openscad)?\n([\s\S]*?)```/i)
-    if (match) return match[1].trim()
-
-    const lines = input.split('\n')
-    const codeLines = lines.filter(line =>
-      line.trim().startsWith('//') ||
-      line.includes('=') ||
-      line.includes('cube') ||
-      line.includes('cylinder') ||
-      line.includes('translate') ||
-      line.includes('difference') ||
-      line.includes('{') ||
-      line.includes('}')
-    )
-    return codeLines.join('\n').trim()
-  }
-
+  // === Prompt helper ===
   function buildGuidedPrompt(currentCode: string, userInstruction: string, res: number) {
     return [
       'You are an expert OpenSCAD assistant. Build a new model or modify the existing model as requested.',
@@ -137,9 +118,10 @@ export default function DashboardPage() {
 
   async function renderStlFromCodeStrict(code: string, res: number): Promise<string> {
     const formData = new FormData()
+    // prepend $fn for curve resolution
     formData.append('code', `$fn = ${res};\n` + code)
 
-    const backendRes = await fetch('https://scad-backend-production.up.railway.app/render', {
+    const backendRes = await fetch(RENDER_URL, {
       method: 'POST',
       body: formData,
     })
@@ -160,32 +142,39 @@ export default function DashboardPage() {
     return URL.createObjectURL(blob)
   }
 
-  // --- Auto-scroll chat on new messages ---
+  // Auto-scroll chat
   useEffect(() => {
     const el = chatContainerRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
   }, [history])
 
-  // --- Undo/Redo handlers ---
+  // Undo/Redo keybindings
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().includes('MAC')
+      const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey
+
+      if (ctrlOrCmd && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        handleUndo()
+      }
+      if (ctrlOrCmd && e.key === 'z' && e.shiftKey) {
+        e.preventDefault()
+        handleRedo()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pastStates, futureStates])
+
   const handleUndo = async () => {
     if (pastStates.length === 0) return
-
-    // move current -> future
     setFutureStates(prev => [
       ...prev,
-      {
-        history,
-        response,
-        stlBlobUrl,
-        userPrompt,
-        codeGenerated,
-        currentProjectId,
-        resolution,
-      },
+      { history, response, stlBlobUrl, userPrompt, codeGenerated, currentProjectId, resolution },
     ])
-
-    // restore from past
     const prevStack = [...pastStates]
     const snapshot = prevStack.pop()!
     setPastStates(prevStack)
@@ -212,22 +201,10 @@ export default function DashboardPage() {
 
   const handleRedo = async () => {
     if (futureStates.length === 0) return
-
-    // move current -> past
     setPastStates(prev => [
       ...prev,
-      {
-        history,
-        response,
-        stlBlobUrl,
-        userPrompt,
-        codeGenerated,
-        currentProjectId,
-        resolution,
-      },
+      { history, response, stlBlobUrl, userPrompt, codeGenerated, currentProjectId, resolution },
     ])
-
-    // restore from future
     const nextStack = [...futureStates]
     const snapshot = nextStack.pop()!
     setFutureStates(nextStack)
@@ -252,38 +229,16 @@ export default function DashboardPage() {
     }
   }
 
-  // --- Keyboard shortcuts: Undo (Ctrl/Cmd+Z), Redo (Ctrl/Cmd+Shift+Z) ---
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toUpperCase().includes('MAC')
-      const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey
-
-      if (ctrlOrCmd && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault()
-        handleUndo()
-      }
-      if (ctrlOrCmd && e.key === 'z' && e.shiftKey) {
-        e.preventDefault()
-        handleRedo()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pastStates, futureStates])
-
-  // --- Submit: build guided prompt, show AI text if no code, render if code ---
+  // === Submit ===
   const handleSubmit = async () => {
     if (!userPrompt) return
     setLoading(true)
-
-    // snapshot BEFORE changing state so undo reverts the whole prompt action
     takeSnapshot()
 
-    const baseHistory = [...history, { role: 'user', content: userPrompt }]
+    const baseHistory: ChatMsg[] = [...history, { role: "user", content: userPrompt }];
 
     try {
-      // ✅ pass (currentCode, userText, resolution) — correct parameter order
+      // guided prompt that includes prior code & rules
       const guidedPrompt = buildGuidedPrompt(response, userPrompt, resolution)
 
       const res = await fetch('/api/generate', {
@@ -296,8 +251,10 @@ export default function DashboardPage() {
       })
 
       const data = await res.json()
-      const aiText = data?.code ?? data?.question ?? data?.content ?? ''
-      const { message, code } = parseAIResponse(aiText)
+
+      // Your API returns either .code or .question or .content
+      const combined = data?.code ?? data?.question ?? data?.content ?? ''
+      const { message, code } = parseAIResponse(combined)
 
       if (code && code.trim().length > 0) {
         setResponse(code)
@@ -313,7 +270,7 @@ export default function DashboardPage() {
           setStlBlobUrl(null)
         }
       } else {
-        // no code – show the AI text
+        // no code – show the assistant text (question/explanation)
         setHistory([...baseHistory, { role: 'assistant', content: message || '✉️ (No response text)' }])
       }
 
@@ -327,7 +284,18 @@ export default function DashboardPage() {
     }
   }
 
-  // --- Save / Load / Update / Delete ---
+  // === Projects: Save new / Update / Load / Rename / Delete ===
+  const refreshProjects = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const { data } = await supabase
+      .from('projects')
+      .select('id, title, prompt, response, history, created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+    setProjects(data ?? [])
+  }
+
   const handleSaveProject = async () => {
     if (!userPrompt && !response) return
     const title = window.prompt('Enter a title for your project:')
@@ -336,7 +304,8 @@ export default function DashboardPage() {
     const { data: { user }, error } = await supabase.auth.getUser()
     if (error || !user) return
 
-    const { error: insertError } = await supabase
+    // return the inserted row so we can set currentProjectId
+    const { data: inserted, error: insertError } = await supabase
       .from('projects')
       .insert({
         user_id: user.id,
@@ -345,8 +314,12 @@ export default function DashboardPage() {
         response,
         history,
       })
+      .select('*')
+      .single()
 
     if (!insertError) {
+      setCurrentProjectId(inserted?.id ?? null)
+      await refreshProjects()
       setShowSaveSuccess(true)
       setTimeout(() => setShowSaveSuccess(false), 3000)
     }
@@ -354,7 +327,6 @@ export default function DashboardPage() {
 
   const handleUpdateProject = async () => {
     if (!currentProjectId) return
-
     const { error } = await supabase
       .from('projects')
       .update({
@@ -365,6 +337,7 @@ export default function DashboardPage() {
       .eq('id', currentProjectId)
 
     if (!error) {
+      await refreshProjects()
       setShowSaveSuccess(true)
       setTimeout(() => setShowSaveSuccess(false), 3000)
     }
@@ -374,20 +347,23 @@ export default function DashboardPage() {
     const project = projects.find(p => p.id === projectId)
     if (!project) return
 
-    // snapshot current before loading another
     takeSnapshot()
 
     setCurrentProjectId(projectId)
-    setUserPrompt(project.prompt)
-    setResponse(project.response)
-    setCodeGenerated(true)
+    setUserPrompt(project.prompt || '')
+    setResponse(project.response || '')
+    setCodeGenerated(!!project.response)
     setHistory(project.history ?? [])
 
-    try {
-      const url = await renderStlFromCodeStrict(project.response, resolution)
-      setStlBlobUrl(url)
-    } catch (e) {
-      console.error('Error rendering saved project:', e)
+    if (project.response) {
+      try {
+        const url = await renderStlFromCodeStrict(project.response, resolution)
+        setStlBlobUrl(url)
+      } catch (e) {
+        console.error('Error rendering saved project:', e)
+        setStlBlobUrl(null)
+      }
+    } else {
       setStlBlobUrl(null)
     }
   }
@@ -395,7 +371,6 @@ export default function DashboardPage() {
   const handleRename = async (projectId: string) => {
     const newTitle = window.prompt('Enter a new name:')
     if (!newTitle) return
-
     await supabase.from('projects').update({ title: newTitle }).eq('id', projectId)
     setProjects(prev => prev.map(p => (p.id === projectId ? { ...p, title: newTitle } : p)))
   }
@@ -403,9 +378,16 @@ export default function DashboardPage() {
   const handleDelete = async (projectId: string) => {
     const confirmDelete = confirm('Delete this project?')
     if (!confirmDelete) return
-
     await supabase.from('projects').delete().eq('id', projectId)
     setProjects(prev => prev.filter(p => p.id !== projectId))
+    if (currentProjectId === projectId) {
+      setCurrentProjectId(null)
+      setUserPrompt('')
+      setResponse('')
+      setHistory([])
+      setCodeGenerated(false)
+      setStlBlobUrl(null)
+    }
   }
 
   const handleDownload = () => {
@@ -416,7 +398,7 @@ export default function DashboardPage() {
     link.click()
   }
 
-  // --- UI ---
+  // === UI ===
   return (
     <div className={`flex flex-col lg:flex-row gap-4 p-4 min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}>
 
@@ -482,7 +464,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Chat box (auto-scrolls) */}
+        {/* Chat area */}
         <div
           ref={chatContainerRef}
           className="max-h-64 overflow-y-auto space-y-2 border border-gray-300 dark:border-gray-600 p-2 rounded bg-gray-50 dark:bg-gray-700"
@@ -496,7 +478,8 @@ export default function DashboardPage() {
                   : 'bg-gray-100 dark:bg-gray-800'
               }`}
             >
-              <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> {msg.content}
+              <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong>{' '}
+              <span className="whitespace-pre-wrap">{msg.content}</span>
             </div>
           ))}
         </div>
@@ -506,7 +489,7 @@ export default function DashboardPage() {
           rows={3}
           value={userPrompt}
           onChange={(e) => setUserPrompt(e.target.value)}
-          placeholder="Describe your part..."
+          placeholder="Describe your part, or answer the AI’s question…"
         />
 
         <div className="flex gap-2">
