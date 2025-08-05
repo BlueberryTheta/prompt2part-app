@@ -38,16 +38,16 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-100 via-white to-blue-200 px-4">
-      <div className="bg-white shadow-xl rounded-xl p-8 w-full max-w-md">
-        <h1 className="text-2xl font-bold text-center mb-6">
+    <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4">
+      <div className="bg-white shadow-2xl rounded-lg p-8 w-full max-w-md">
+        <h1 className="text-3xl font-extrabold text-gray-900 text-center mb-6">
           {isLogin ? 'Welcome Back 👋' : 'Create an Account'}
         </h1>
 
         <input
           type="email"
           placeholder="Email"
-          className="border border-gray-300 p-3 w-full mb-4 rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="border border-gray-400 p-3 w-full mb-4 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
@@ -55,23 +55,23 @@ export default function LoginPage() {
         <input
           type="password"
           placeholder="Password"
-          className="border border-gray-300 p-3 w-full mb-4 rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="border border-gray-400 p-3 w-full mb-4 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
 
         <button
           onClick={handleAuth}
-          className="bg-blue-600 hover:bg-blue-700 transition text-white w-full py-3 rounded font-medium mb-4"
+          className="bg-blue-700 hover:bg-blue-800 transition text-white w-full py-3 rounded font-semibold mb-4"
         >
           {isLogin ? 'Login' : 'Sign Up'}
         </button>
 
-        <p className="text-center text-sm">
+        <p className="text-center text-sm text-gray-800">
           {isLogin ? 'New to Prompt2Part?' : 'Already have an account?'}{' '}
           <button
             onClick={() => setIsLogin(!isLogin)}
-            className="text-blue-600 underline font-medium"
+            className="text-blue-700 underline font-medium hover:text-blue-900"
           >
             {isLogin ? 'Sign Up' : 'Login'}
           </button>
@@ -79,10 +79,10 @@ export default function LoginPage() {
 
         {message && (
           <div
-            className={`mt-4 text-sm text-center p-2 rounded ${
+            className={`mt-4 text-sm text-center p-3 rounded ${
               message.startsWith('✅')
-                ? 'bg-green-100 text-green-700'
-                : 'bg-red-100 text-red-700'
+                ? 'bg-green-100 text-green-800 border border-green-300'
+                : 'bg-red-100 text-red-800 border border-red-300'
             }`}
           >
             {message}
