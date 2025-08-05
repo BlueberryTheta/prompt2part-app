@@ -22,17 +22,24 @@ type Spec = {
 function sysPromptSpec(): string {
   return `
 You are a CAD requirements assistant. Your ONLY job is to:
-1) Read the user's request + any prior spec, then produce an updated structured SPEC JSON.
-2) Identify MISSING fields that prevent modeling.
-3) Ask TARGETED questions to fill the missing fields.
-NEVER generate code in this step. NEVER assume unknown dimensions. Use "units": "mm" unless user explicitly states inches.
-4) If the user asks a simple question, answer accordingly. NEVER generate code in this step. 
+1. Read the user's request + any prior spec, then produce an updated structured SPEC JSON.
+2. Identify MISSING fields that prevent modeling.
+3. Ask TARGETED questions to fill the missing fields.
 
-Output STRICTLY this JSON:
+IMPORTANT:
+- NEVER generate code in this step.
+- NEVER invent values.
+- NEVER include prose, explanations, or markdown.
+- ALWAYS quote all keys and string values.
+- NEVER return null. If unknown, omit the key.
+- DEFAULT "units" to "mm" unless user explicitly says inches.
+
+Output ONLY strict JSON:
+
 {
-  "spec": <Spec>,
-  "missing": string[],
-  "questions": string[]
+  "spec": { ... },
+  "missing": [ "..." ],
+  "questions": [ "..." ]
 }
 `.trim()
 }
@@ -59,10 +66,9 @@ export async function POST(req: NextRequest) {
     const messagesA: Msg[] = [
       { role: 'system', content: sysPromptSpec() },
       ...(history || []),
-      { role: 'user', content: `User says: ${prompt}\n\nExisting spec (if any): ${JSON.stringify(currentSpec || {})}` },
+      { role: 'user', content: `User says: ${prompt}\n\nExisting spec: ${JSON.stringify(currentSpec || {})}` },
     ]
 
-    console.log('🧠 Stage A: Extracting SPEC from OpenAI...')
     const resA = await fetch(OPENAI_URL, {
       method: 'POST',
       headers: {
@@ -72,39 +78,39 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         model: OPENAI_MODEL,
         temperature: 0.2,
-        max_tokens: 800,
+        max_tokens: 1000,
         messages: messagesA,
       }),
     })
 
     const dataA = await resA.json()
-    let contentA = dataA?.choices?.[0]?.message?.content ?? '{}'
-    console.log('📝 Raw SPEC content:', contentA)
+    const rawA = dataA?.choices?.[0]?.message?.content || ''
 
-    let jsonA: { spec?: Spec; missing?: string[]; questions?: string[] } = {}
+    console.log('🔍 Raw SPEC JSON:', rawA)
+
+    let jsonA = { spec: {}, missing: [], questions: [] }
 
     try {
-      jsonA = JSON.parse(contentA)
+      // Attempt direct parse
+      jsonA = JSON.parse(rawA)
     } catch {
-      const fallbackMatch = contentA.match(/\{[\s\S]*?\}/)
-      if (fallbackMatch) {
-        try {
-          jsonA = JSON.parse(fallbackMatch[0])
-        } catch (e2) {
-          throw new Error('Spec content includes invalid or partial JSON (check for trailing commas, unquoted keys, or nulls).')
-        }
+      // Fallback: try extracting inner JSON block
+      const match = rawA.match(/\{[\s\S]+}/)
+      if (match) {
+        const cleaned = match[0]
+          .replace(/,\s*}/g, '}') // remove trailing commas
+          .replace(/,\s*]/g, ']') // remove trailing commas in arrays
+          .replace(/\bnull\b/g, '""') // replace nulls with empty string
+          .replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":') // quote unquoted keys
+        jsonA = JSON.parse(cleaned)
       } else {
-        throw new Error('Spec-extractor returned malformed output.')
+        throw new Error('Spec content includes invalid or partial JSON (check for trailing commas, unquoted keys, or nulls).')
       }
     }
 
     const updatedSpec: Spec = jsonA.spec || {}
     const missing: string[] = jsonA.missing || []
     const questions: string[] = jsonA.questions || []
-
-    console.log('✅ Parsed SPEC:', updatedSpec)
-    console.log('❓ Missing:', missing)
-    console.log('❓ Questions:', questions)
 
     if (missing.length > 0 || questions.length > 0) {
       return NextResponse.json({
@@ -115,19 +121,16 @@ export async function POST(req: NextRequest) {
         content:
           questions.length > 0
             ? `Before I can generate the model, I need:\n- ${missing.join('\n- ')}\n\nQuestions:\n- ${questions.join('\n- ')}`
-            : `I still need:\n- ${missing.join('\n- ')}`,
+            : `Missing:\n- ${missing.join('\n- ')}`,
       })
     }
 
-    // -------------------
-    // Stage B: OpenSCAD
-    // -------------------
+    // Stage B – Code generation
     const messagesB: Msg[] = [
       { role: 'system', content: sysPromptCode() },
       { role: 'user', content: `SPEC:\n${JSON.stringify(updatedSpec, null, 2)}` },
     ]
 
-    console.log('🧱 Stage B: Generating OpenSCAD code...')
     const resB = await fetch(OPENAI_URL, {
       method: 'POST',
       headers: {
@@ -144,9 +147,8 @@ export async function POST(req: NextRequest) {
 
     const dataB = await resB.json()
     const code = dataB?.choices?.[0]?.message?.content ?? ''
-    const isLikelySCAD = /cube|cylinder|translate|difference|module|linear_extrude/i.test(code)
 
-    console.log('🔧 Generated Code:', code.slice(0, 200) + '...')
+    const isLikelySCAD = /cube|cylinder|translate|difference|module|linear_extrude/i.test(code)
 
     return NextResponse.json({
       type: isLikelySCAD ? 'code' : 'questions',
@@ -154,12 +156,12 @@ export async function POST(req: NextRequest) {
       code: isLikelySCAD ? code : null,
       content: isLikelySCAD
         ? 'Here is the OpenSCAD code based on your confirmed specifications.'
-        : 'The information is still incomplete; please answer the pending questions.',
+        : 'Still missing details — please answer the pending questions.',
     })
   } catch (err: any) {
     console.error('🛑 /api/generate error:', err)
     return NextResponse.json(
-      { error: err?.message || 'Internal server error' },
+      { error: err?.message || 'Server error while generating model' },
       { status: 500 }
     )
   }
