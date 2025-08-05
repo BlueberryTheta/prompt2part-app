@@ -343,6 +343,21 @@ export default function DashboardPage() {
     }
   }
 
+  const handleNewProject = () => {
+  const proceed = confirm('⚠️ This will clear your current work. Make sure to save before starting a new project. Continue?')
+  if (!proceed) return
+
+  setHistory([])
+  setUserPrompt('')
+  setResponse('')
+  setCodeGenerated(false)
+  setStlBlobUrl(null)
+  setCurrentProjectId(null)
+  setPastStates([])
+  setFutureStates([])
+}
+
+
   const handleUpdateProject = async () => {
     if (!currentProjectId) return
     const { error } = await supabase
@@ -511,6 +526,7 @@ export default function DashboardPage() {
         />
 
         <div className="flex gap-2">
+          
           <button
             type="button"
             onClick={handleSubmit}
@@ -519,6 +535,9 @@ export default function DashboardPage() {
           >
             {loading ? 'Generating...' : 'Send'}
           </button>
+
+          
+
 
           <button
             onClick={handleUndo}
@@ -536,6 +555,13 @@ export default function DashboardPage() {
             Redo
           </button>
 
+          <button
+            onClick={handleNewProject}
+            className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded"
+            >
+            🆕 New Project
+          </button>
+
           {currentProjectId ? (
             <button
               onClick={handleUpdateProject}
@@ -543,6 +569,7 @@ export default function DashboardPage() {
             >
               Save Changes
             </button>
+            
           ) : (
             <button
               onClick={handleSaveProject}
@@ -551,6 +578,9 @@ export default function DashboardPage() {
             >
               Save as New Project
             </button>
+
+
+
           )}
         </div>
       </div>
