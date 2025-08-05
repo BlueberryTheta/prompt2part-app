@@ -4,7 +4,6 @@ const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 const OPENAI_MODEL = 'gpt-4o'
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
-
 type Spec = {
   units?: 'mm' | 'inch'
   part_type?: string
@@ -27,8 +26,9 @@ You are a CAD requirements assistant. Your ONLY job is to:
 2) Identify MISSING fields that prevent modeling.
 3) Ask TARGETED questions to fill the missing fields.
 NEVER generate code in this step. NEVER assume unknown dimensions. Use "units": "mm" unless user explicitly states inches.
+4) If the user asks a simple question, answer accordingly. NEVER generate code in this step. 
 
-Output STRICTLY this JSON with keys:
+Output STRICTLY this JSON:
 {
   "spec": <Spec>,
   "missing": string[],
@@ -51,31 +51,18 @@ Rules:
 `.trim()
 }
 
-function sanitizeJSON(input: string): string {
-  return input
-    .replace(/,\s*}/g, '}')                  // remove trailing commas before }
-    .replace(/,\s*]/g, ']')                  // remove trailing commas before ]
-    .replace(/([{,])\s*(\w+)\s*:/g, '$1 "$2":') // ensure keys are quoted
-    .replace(/:\s*undefined/g, ': null')     // replace undefined with null
-}
-
-
 export async function POST(req: NextRequest) {
   try {
     const { prompt, history = [], spec: currentSpec }: { prompt: string; history?: Msg[]; spec?: Spec } =
       await req.json()
 
-    console.log('📥 Incoming Prompt:', prompt)
-    console.log('🧠 Current Spec:', JSON.stringify(currentSpec, null, 2))
-    console.log('📚 History:', history)
-
-    // STEP A: Extract updated SPEC
     const messagesA: Msg[] = [
       { role: 'system', content: sysPromptSpec() },
-      ...history,
+      ...(history || []),
       { role: 'user', content: `User says: ${prompt}\n\nExisting spec (if any): ${JSON.stringify(currentSpec || {})}` },
     ]
 
+    console.log('🧠 Stage A: Extracting SPEC from OpenAI...')
     const resA = await fetch(OPENAI_URL, {
       method: 'POST',
       headers: {
@@ -91,46 +78,31 @@ export async function POST(req: NextRequest) {
     })
 
     const dataA = await resA.json()
-    const contentA = dataA?.choices?.[0]?.message?.content ?? '{}'
-    console.log('🧾 Raw SPEC Response:', contentA)
+    let contentA = dataA?.choices?.[0]?.message?.content ?? '{}'
+    console.log('📝 Raw SPEC content:', contentA)
 
-    let parsed: { spec?: Spec; missing?: string[]; questions?: string[] } = {}
+    let jsonA: { spec?: Spec; missing?: string[]; questions?: string[] } = {}
 
-try {
-  parsed = JSON.parse(contentA)
-} catch (err) {
-  console.warn('⚠️ Primary JSON parse failed. Attempting fallback...')
-  console.warn('🔍 Raw AI content:', contentA)
-
-  // Try to extract the JSON block
-  const fallback = contentA.match(/\{[\s\S]*?\}/)
-  if (fallback) {
-    const sanitized = sanitizeJSON(fallback[0])
     try {
-      parsed = JSON.parse(sanitized)
-    } catch (fallbackErr) {
-      console.error('❌ Fallback JSON parse error:', fallbackErr)
-      throw new Error('Spec content includes invalid or partial JSON (check for trailing commas, unquoted keys, or nulls).')
+      jsonA = JSON.parse(contentA)
+    } catch {
+      const fallbackMatch = contentA.match(/\{[\s\S]*?\}/)
+      if (fallbackMatch) {
+        try {
+          jsonA = JSON.parse(fallbackMatch[0])
+        } catch (e2) {
+          throw new Error('Spec content includes invalid or partial JSON (check for trailing commas, unquoted keys, or nulls).')
+        }
+      } else {
+        throw new Error('Spec-extractor returned malformed output.')
+      }
     }
-  } else {
-    throw new Error('Spec-extractor returned malformed text with no valid JSON block.')
-  }
-}
 
-// Check for undefined/null fields that might cause codegen bugs
-if (parsed && typeof parsed === 'object') {
-  const jsonStr = JSON.stringify(parsed)
-  if (jsonStr.includes('null')) {
-    console.warn('⚠️ Warning: parsed JSON contains nulls. Ensure OpenAI is asking the right questions before generating code.')
-  }
-}
+    const updatedSpec: Spec = jsonA.spec || {}
+    const missing: string[] = jsonA.missing || []
+    const questions: string[] = jsonA.questions || []
 
-
-    const updatedSpec = parsed.spec || {}
-    const missing = parsed.missing || []
-    const questions = parsed.questions || []
-
-    console.log('✅ Parsed SPEC:', JSON.stringify(updatedSpec, null, 2))
+    console.log('✅ Parsed SPEC:', updatedSpec)
     console.log('❓ Missing:', missing)
     console.log('❓ Questions:', questions)
 
@@ -140,18 +112,22 @@ if (parsed && typeof parsed === 'object') {
         spec: updatedSpec,
         missing,
         questions,
-        content: questions.length
-          ? `Before I can generate the model, I need:\n- ${missing.join('\n- ')}\n\nQuestions:\n- ${questions.join('\n- ')}`
-          : `I still need:\n- ${missing.join('\n- ')}`,
+        content:
+          questions.length > 0
+            ? `Before I can generate the model, I need:\n- ${missing.join('\n- ')}\n\nQuestions:\n- ${questions.join('\n- ')}`
+            : `I still need:\n- ${missing.join('\n- ')}`,
       })
     }
 
-    // STEP B: Generate OpenSCAD Code
+    // -------------------
+    // Stage B: OpenSCAD
+    // -------------------
     const messagesB: Msg[] = [
       { role: 'system', content: sysPromptCode() },
       { role: 'user', content: `SPEC:\n${JSON.stringify(updatedSpec, null, 2)}` },
     ]
 
+    console.log('🧱 Stage B: Generating OpenSCAD code...')
     const resB = await fetch(OPENAI_URL, {
       method: 'POST',
       headers: {
@@ -168,10 +144,9 @@ if (parsed && typeof parsed === 'object') {
 
     const dataB = await resB.json()
     const code = dataB?.choices?.[0]?.message?.content ?? ''
-
-    console.log('🛠️ Generated OpenSCAD code:', code)
-
     const isLikelySCAD = /cube|cylinder|translate|difference|module|linear_extrude/i.test(code)
+
+    console.log('🔧 Generated Code:', code.slice(0, 200) + '...')
 
     return NextResponse.json({
       type: isLikelySCAD ? 'code' : 'questions',
@@ -183,6 +158,9 @@ if (parsed && typeof parsed === 'object') {
     })
   } catch (err: any) {
     console.error('🛑 /api/generate error:', err)
-    return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 })
+    return NextResponse.json(
+      { error: err?.message || 'Internal server error' },
+      { status: 500 }
+    )
   }
 }
