@@ -1,72 +1,81 @@
+// app/api/generate/route.ts
+
 import { NextRequest, NextResponse } from 'next/server'
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 const OPENAI_MODEL = 'gpt-4o'
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
-type Spec = {
-  units?: 'mm' | 'inch'
-  part_type?: string
-  overall?: { x?: number; y?: number; z?: number }
-  features?: Array<
-    | { type: 'hole'; diameter?: number; count?: number; pattern?: string; positions?: Array<{ x: number; y: number }>; through?: boolean; countersink?: boolean }
-    | { type: 'slot'; width?: number; length?: number; center?: { x: number; y: number }; angle?: number }
-    | { type: 'fillet'; radius?: number; edges?: string }
-    | { type: 'chamfer'; size?: number; edges?: string }
-  >
-  mounting?: { surface?: string; holes?: number }
-  tolerances?: { general?: number; hole_clearance?: number }
-  notes?: string
-}
+type Spec = Record<string, any>
 
 function sysPromptSpec(): string {
   return `
-You are a CAD requirements assistant. Your ONLY job is to:
-1. Read the user's request + any prior spec, then produce an updated structured SPEC JSON.
-2. Identify MISSING fields that prevent modeling.
-3. Ask TARGETED questions to fill the missing fields.
+You are a CAD assistant that updates a structured SPEC JSON based on user input. You also determine the user's intent.
 
-IMPORTANT:
-- NEVER generate code in this step.
-- NEVER invent values.
-- NEVER include prose, explanations, or markdown.
-- ALWAYS quote all keys and string values.
-- NEVER return null. If unknown, omit the key.
-- DEFAULT "units" to "mm" unless user explicitly says inches.
-
-Output ONLY strict JSON:
-
+Your response MUST be a JSON with:
 {
-  "spec": { ... },
-  "missing": [ "..." ],
-  "questions": [ "..." ]
+  "intent": "update" | "clarification" | "question",
+  "spec": <updated spec as JSON>,
+  "missing": [<string>],
+  "questions": [<string>]
 }
+
+Rules:
+- Only set intent to "update" if the SPEC has materially changed.
+- Set intent to "clarification" if user input attempts to clarify previous fields.
+- Set intent to "question" if the user is asking for advice or general feedback.
+- Do NOT assume missing values; return them in "missing" and ask targeted "questions".
 `.trim()
 }
 
 function sysPromptCode(): string {
   return `
-You are an OpenSCAD generator. Produce only valid OpenSCAD for the SPEC given.
+You are an OpenSCAD generator. Based on a valid SPEC, generate OpenSCAD code ONLY.
 
-Rules:
-- Use millimeters if units == "mm".
-- Include concise comments describing parameters and steps.
-- Do not include prose or markdown—only code.
-- Use named variables for key dims at the top.
-- If features include holes: ensure positions are respected and diameters are correct; use translate() + cylinder() and difference().
-- Code should be complete & renderable.
+Output ONLY the code. No explanations, markdown, or formatting.
+Use mm as the default unit unless told otherwise.
+Include reasonable variable names at the top for key dimensions.
 `.trim()
+}
+
+function sysPromptQnA(): string {
+  return `
+You are a helpful CAD assistant. If the user asks a general question (e.g. how to improve a design), answer in clear, short language.
+
+Do NOT generate code unless specifically asked. Provide bullet points or 1-2 sentences.
+`.trim()
+}
+
+function deepEqual(a: any, b: any): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+function safeParseJSON(text: string): any {
+  try {
+    return JSON.parse(text)
+  } catch {
+    const match = text.match(/\{[\s\S]*?\}/)
+    if (match) {
+      try {
+        return JSON.parse(match[0])
+      } catch (err) {
+        console.warn('⚠️ Partial match JSON parse failed:', err)
+      }
+    }
+    throw new Error('❌ Spec content includes invalid or partial JSON (check for trailing commas, unquoted keys, or nulls).')
+  }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, history = [], spec: currentSpec }: { prompt: string; history?: Msg[]; spec?: Spec } =
+    const { prompt, history = [], spec: currentSpec = {} }: { prompt: string; history?: Msg[]; spec?: Spec } =
       await req.json()
 
+    // Stage 1: Extract intent + updated spec
     const messagesA: Msg[] = [
       { role: 'system', content: sysPromptSpec() },
-      ...(history || []),
-      { role: 'user', content: `User says: ${prompt}\n\nExisting spec: ${JSON.stringify(currentSpec || {})}` },
+      ...(history ?? []),
+      { role: 'user', content: prompt },
     ]
 
     const resA = await fetch(OPENAI_URL, {
@@ -84,48 +93,68 @@ export async function POST(req: NextRequest) {
     })
 
     const dataA = await resA.json()
-    const rawA = dataA?.choices?.[0]?.message?.content || ''
+    const contentA = dataA?.choices?.[0]?.message?.content || ''
+    console.log('🟡 Assistant spec response:\n', contentA)
 
-    console.log('🔍 Raw SPEC JSON:', rawA)
+    const parsed = safeParseJSON(contentA)
+    const updatedSpec: Spec = parsed.spec || {}
+    const missing: string[] = parsed.missing || []
+    const questions: string[] = parsed.questions || []
+    const intent: string = parsed.intent || 'update'
 
-    let jsonA = { spec: {}, missing: [], questions: [] }
-
-    try {
-      // Attempt direct parse
-      jsonA = JSON.parse(rawA)
-    } catch {
-      // Fallback: try extracting inner JSON block
-      const match = rawA.match(/\{[\s\S]+}/)
-      if (match) {
-        const cleaned = match[0]
-          .replace(/,\s*}/g, '}') // remove trailing commas
-          .replace(/,\s*]/g, ']') // remove trailing commas in arrays
-          .replace(/\bnull\b/g, '""') // replace nulls with empty string
-          .replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":') // quote unquoted keys
-        jsonA = JSON.parse(cleaned)
-      } else {
-        throw new Error('Spec content includes invalid or partial JSON (check for trailing commas, unquoted keys, or nulls).')
-      }
-    }
-
-    const updatedSpec: Spec = jsonA.spec || {}
-    const missing: string[] = jsonA.missing || []
-    const questions: string[] = jsonA.questions || []
-
-    if (missing.length > 0 || questions.length > 0) {
+    // Handle missing info or clarifications
+    if (missing.length > 0 || questions.length > 0 || intent === 'clarification') {
       return NextResponse.json({
         type: 'questions',
+        intent,
         spec: updatedSpec,
         missing,
         questions,
-        content:
-          questions.length > 0
-            ? `Before I can generate the model, I need:\n- ${missing.join('\n- ')}\n\nQuestions:\n- ${questions.join('\n- ')}`
-            : `Missing:\n- ${missing.join('\n- ')}`,
+        content: questions.length > 0
+          ? `Before I can generate the model, I need:\n- ${missing.join('\n- ')}\n\nQuestions:\n- ${questions.join('\n- ')}`
+          : `I still need:\n- ${missing.join('\n- ')}`,
       })
     }
 
-    // Stage B – Code generation
+    if (intent === 'question') {
+      // Handle general advice question
+      const qnaRes = await fetch(OPENAI_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: OPENAI_MODEL,
+          temperature: 0.7,
+          max_tokens: 500,
+          messages: [
+            { role: 'system', content: sysPromptQnA() },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      })
+      const qnaData = await qnaRes.json()
+      const answer = qnaData?.choices?.[0]?.message?.content || 'Let me know how I can help!'
+      return NextResponse.json({
+        type: 'answer',
+        content: answer,
+        spec: updatedSpec,
+      })
+    }
+
+    // Only continue if intent is update and something actually changed
+    const specChanged = !deepEqual(currentSpec, updatedSpec)
+
+    if (!specChanged) {
+      return NextResponse.json({
+        type: 'nochange',
+        spec: updatedSpec,
+        content: 'ℹ️ The model is already up to date with your specifications.',
+      })
+    }
+
+    // Stage 2: Generate OpenSCAD code
     const messagesB: Msg[] = [
       { role: 'system', content: sysPromptCode() },
       { role: 'user', content: `SPEC:\n${JSON.stringify(updatedSpec, null, 2)}` },
@@ -140,28 +169,26 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         model: OPENAI_MODEL,
         temperature: 0.15,
-        max_tokens: 1800,
+        max_tokens: 1600,
         messages: messagesB,
       }),
     })
 
     const dataB = await resB.json()
-    const code = dataB?.choices?.[0]?.message?.content ?? ''
+    const code = dataB?.choices?.[0]?.message?.content || ''
 
-    const isLikelySCAD = /cube|cylinder|translate|difference|module|linear_extrude/i.test(code)
+    const isSCAD = /cube|cylinder|translate|difference|union|rotate/i.test(code)
 
     return NextResponse.json({
-      type: isLikelySCAD ? 'code' : 'questions',
+      type: isSCAD ? 'code' : 'invalid',
       spec: updatedSpec,
-      code: isLikelySCAD ? code : null,
-      content: isLikelySCAD
-        ? 'Here is the OpenSCAD code based on your confirmed specifications.'
-        : 'Still missing details — please answer the pending questions.',
+      code: isSCAD ? code : null,
+      content: isSCAD ? '✅ Model updated based on your request.' : '⚠️ Could not generate code from the spec.',
     })
   } catch (err: any) {
-    console.error('🛑 /api/generate error:', err)
+    console.error('❌ /api/generate error:', err)
     return NextResponse.json(
-      { error: err?.message || 'Server error while generating model' },
+      { error: err?.message || 'Unexpected error occurred in /api/generate' },
       { status: 500 }
     )
   }
