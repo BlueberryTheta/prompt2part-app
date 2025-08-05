@@ -51,6 +51,15 @@ Rules:
 `.trim()
 }
 
+function sanitizeJSON(input: string): string {
+  return input
+    .replace(/,\s*}/g, '}')                  // remove trailing commas before }
+    .replace(/,\s*]/g, ']')                  // remove trailing commas before ]
+    .replace(/([{,])\s*(\w+)\s*:/g, '$1 "$2":') // ensure keys are quoted
+    .replace(/:\s*undefined/g, ': null')     // replace undefined with null
+}
+
+
 export async function POST(req: NextRequest) {
   try {
     const { prompt, history = [], spec: currentSpec }: { prompt: string; history?: Msg[]; spec?: Spec } =
@@ -93,11 +102,12 @@ try {
   console.warn('⚠️ Primary JSON parse failed. Attempting fallback...')
   console.warn('🔍 Raw AI content:', contentA)
 
-  // Try to extract the largest valid JSON object
+  // Try to extract the JSON block
   const fallback = contentA.match(/\{[\s\S]*?\}/)
   if (fallback) {
+    const sanitized = sanitizeJSON(fallback[0])
     try {
-      parsed = JSON.parse(fallback[0])
+      parsed = JSON.parse(sanitized)
     } catch (fallbackErr) {
       console.error('❌ Fallback JSON parse error:', fallbackErr)
       throw new Error('Spec content includes invalid or partial JSON (check for trailing commas, unquoted keys, or nulls).')
