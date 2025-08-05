@@ -4,6 +4,7 @@ const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 const OPENAI_MODEL = 'gpt-4o'
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
+
 type Spec = {
   units?: 'mm' | 'inch'
   part_type?: string
@@ -55,9 +56,14 @@ export async function POST(req: NextRequest) {
     const { prompt, history = [], spec: currentSpec }: { prompt: string; history?: Msg[]; spec?: Spec } =
       await req.json()
 
+    console.log('📥 Incoming Prompt:', prompt)
+    console.log('🧠 Current Spec:', JSON.stringify(currentSpec, null, 2))
+    console.log('📚 History:', history)
+
+    // STEP A: Extract updated SPEC
     const messagesA: Msg[] = [
       { role: 'system', content: sysPromptSpec() },
-      ...(history || []),
+      ...history,
       { role: 'user', content: `User says: ${prompt}\n\nExisting spec (if any): ${JSON.stringify(currentSpec || {})}` },
     ]
 
@@ -77,23 +83,33 @@ export async function POST(req: NextRequest) {
 
     const dataA = await resA.json()
     const contentA = dataA?.choices?.[0]?.message?.content ?? '{}'
+    console.log('🧾 Raw SPEC Response:', contentA)
 
-    let jsonA: { spec?: Spec; missing?: string[]; questions?: string[] } = {}
+    let parsed: { spec?: Spec; missing?: string[]; questions?: string[] } = {}
 
     try {
-      jsonA = JSON.parse(contentA)
-    } catch {
-      const fallbackMatch = contentA.match(/\{[\s\S]*?\}/)
-      if (fallbackMatch) {
-        jsonA = JSON.parse(fallbackMatch[0])
+      parsed = JSON.parse(contentA)
+    } catch (err) {
+      const fallback = contentA.match(/\{[\s\S]*\}/)
+      if (fallback) {
+        try {
+          parsed = JSON.parse(fallback[0])
+        } catch (fallbackErr) {
+          console.error('❌ Fallback JSON parse error:', fallbackErr)
+          throw new Error('Spec content is not valid JSON.')
+        }
       } else {
-        throw new Error('Spec-extractor returned invalid JSON.')
+        throw new Error('Spec-extractor returned no valid JSON.')
       }
     }
 
-    const updatedSpec: Spec = jsonA.spec || {}
-    const missing: string[] = jsonA.missing || []
-    const questions: string[] = jsonA.questions || []
+    const updatedSpec = parsed.spec || {}
+    const missing = parsed.missing || []
+    const questions = parsed.questions || []
+
+    console.log('✅ Parsed SPEC:', JSON.stringify(updatedSpec, null, 2))
+    console.log('❓ Missing:', missing)
+    console.log('❓ Questions:', questions)
 
     if (missing.length > 0 || questions.length > 0) {
       return NextResponse.json({
@@ -101,14 +117,13 @@ export async function POST(req: NextRequest) {
         spec: updatedSpec,
         missing,
         questions,
-        content:
-          questions.length > 0
-            ? `Before I can generate the model, I need:\n- ${missing.join('\n- ')}\n\nQuestions:\n- ${questions.join('\n- ')}`
-            : `I still need:\n- ${missing.join('\n- ')}`,
+        content: questions.length
+          ? `Before I can generate the model, I need:\n- ${missing.join('\n- ')}\n\nQuestions:\n- ${questions.join('\n- ')}`
+          : `I still need:\n- ${missing.join('\n- ')}`,
       })
     }
 
-    // Stage B – Code generation
+    // STEP B: Generate OpenSCAD Code
     const messagesB: Msg[] = [
       { role: 'system', content: sysPromptCode() },
       { role: 'user', content: `SPEC:\n${JSON.stringify(updatedSpec, null, 2)}` },
@@ -130,6 +145,8 @@ export async function POST(req: NextRequest) {
 
     const dataB = await resB.json()
     const code = dataB?.choices?.[0]?.message?.content ?? ''
+
+    console.log('🛠️ Generated OpenSCAD code:', code)
 
     const isLikelySCAD = /cube|cylinder|translate|difference|module|linear_extrude/i.test(code)
 
