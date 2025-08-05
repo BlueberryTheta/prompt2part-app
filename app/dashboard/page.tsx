@@ -231,58 +231,84 @@ export default function DashboardPage() {
 
   // === Submit ===
   const handleSubmit = async () => {
-    if (!userPrompt) return
-    setLoading(true)
-    takeSnapshot()
+  if (!userPrompt) return
+  setLoading(true)
+  takeSnapshot()
 
-    const baseHistory: ChatMsg[] = [...history, { role: "user", content: userPrompt }];
+  const baseHistory: ChatMsg[] = [...history, { role: "user", content: userPrompt }];
 
-    try {
-      // guided prompt that includes prior code & rules
-      const guidedPrompt = buildGuidedPrompt(response, userPrompt, resolution)
+  try {
+    const guidedPrompt = buildGuidedPrompt(response, userPrompt, resolution)
 
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: guidedPrompt,
-          history: baseHistory,
-        }),
-      })
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: guidedPrompt,
+        history: baseHistory,
+      }),
+    })
 
-      const data = await res.json()
+    const data = await res.json()
 
-      // Your API returns either .code or .question or .content
-      const combined = data?.code ?? data?.question ?? data?.content ?? ''
-      const { message, code } = parseAIResponse(combined)
+    switch (data.type) {
+      case 'code':
+        {
+          const code = data.code || ''
+          const message = data.content || '✅ Updated the model.'
+          setResponse(code)
+          setCodeGenerated(true)
 
-      if (code && code.trim().length > 0) {
-        setResponse(code)
-        setCodeGenerated(true)
-
-        try {
-          const url = await renderStlFromCodeStrict(code, resolution)
-          setStlBlobUrl(url)
-          setHistory([...baseHistory, { role: 'assistant', content: '✅ Updated the model.' }])
-        } catch (renderErr: any) {
-          console.error('Render error:', renderErr)
-          setHistory([...baseHistory, { role: 'assistant', content: `❌ Render failed: ${String(renderErr?.message || renderErr)}` }])
-          setStlBlobUrl(null)
+          try {
+            const url = await renderStlFromCodeStrict(code, resolution)
+            setStlBlobUrl(url)
+            setHistory([...baseHistory, { role: 'assistant', content: message }])
+          } catch (renderErr: any) {
+            console.error('Render error:', renderErr)
+            setHistory([...baseHistory, { role: 'assistant', content: `❌ Render failed: ${String(renderErr?.message || renderErr)}` }])
+            setStlBlobUrl(null)
+          }
         }
-      } else {
-        // no code – show the assistant text (question/explanation)
-        setHistory([...baseHistory, { role: 'assistant', content: message || '✉️ (No response text)' }])
-      }
+        break
 
-      setUserPrompt('')
-    } catch (err) {
-      console.error('Error:', err)
-      setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong. Please try again.' }])
-      setStlBlobUrl(null)
-    } finally {
-      setLoading(false)
+      case 'questions':
+        {
+          const message = data.content || '❓ I need more info.'
+          setHistory([...baseHistory, { role: 'assistant', content: message }])
+        }
+        break
+
+      case 'answer':
+        {
+          const message = data.content || '💬 Here’s my response.'
+          setHistory([...baseHistory, { role: 'assistant', content: message }])
+        }
+        break
+
+      case 'nochange':
+        {
+          const message = data.content || 'ℹ️ No changes made to the model.'
+          setHistory([...baseHistory, { role: 'assistant', content: message }])
+        }
+        break
+
+      default:
+        {
+          const fallbackMsg = data.content || '⚠️ Unknown response from assistant.'
+          setHistory([...baseHistory, { role: 'assistant', content: fallbackMsg }])
+        }
+        break
     }
+
+    setUserPrompt('')
+  } catch (err) {
+    console.error('Error:', err)
+    setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong. Please try again.' }])
+    setStlBlobUrl(null)
+  } finally {
+    setLoading(false)
   }
+}
 
   // === Projects: Save new / Update / Load / Rename / Delete ===
   const refreshProjects = async () => {
