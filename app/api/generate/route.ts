@@ -87,21 +87,34 @@ export async function POST(req: NextRequest) {
 
     let parsed: { spec?: Spec; missing?: string[]; questions?: string[] } = {}
 
+try {
+  parsed = JSON.parse(contentA)
+} catch (err) {
+  console.warn('⚠️ Primary JSON parse failed. Attempting fallback...')
+  console.warn('🔍 Raw AI content:', contentA)
+
+  // Try to extract the largest valid JSON object
+  const fallback = contentA.match(/\{[\s\S]*?\}/)
+  if (fallback) {
     try {
-      parsed = JSON.parse(contentA)
-    } catch (err) {
-      const fallback = contentA.match(/\{[\s\S]*\}/)
-      if (fallback) {
-        try {
-          parsed = JSON.parse(fallback[0])
-        } catch (fallbackErr) {
-          console.error('❌ Fallback JSON parse error:', fallbackErr)
-          throw new Error('Spec content is not valid JSON.')
-        }
-      } else {
-        throw new Error('Spec-extractor returned no valid JSON.')
-      }
+      parsed = JSON.parse(fallback[0])
+    } catch (fallbackErr) {
+      console.error('❌ Fallback JSON parse error:', fallbackErr)
+      throw new Error('Spec content includes invalid or partial JSON (check for trailing commas, unquoted keys, or nulls).')
     }
+  } else {
+    throw new Error('Spec-extractor returned malformed text with no valid JSON block.')
+  }
+}
+
+// Check for undefined/null fields that might cause codegen bugs
+if (parsed && typeof parsed === 'object') {
+  const jsonStr = JSON.stringify(parsed)
+  if (jsonStr.includes('null')) {
+    console.warn('⚠️ Warning: parsed JSON contains nulls. Ensure OpenAI is asking the right questions before generating code.')
+  }
+}
+
 
     const updatedSpec = parsed.spec || {}
     const missing = parsed.missing || []
