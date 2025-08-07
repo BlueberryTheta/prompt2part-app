@@ -37,28 +37,60 @@ export default function LoginPage() {
     }
   }
 
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setMessage('❌ Please enter your email to reset your password.')
+      return
+    }
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: 'https://prompt2part.vercel.app/update-password',
+    })
+    if (error) {
+      setMessage(`❌ ${error.message}`)
+    } else {
+      setMessage('✅ Password reset link sent! Check your email.')
+    }
+  }
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4">
-      <div className="bg-white shadow-2xl rounded-lg p-8 w-full max-w-md">
+    <div className="min-h-screen flex items-center justify-center bg-gray-950 px-4">
+      <div className="bg-white shadow-xl rounded-xl p-8 w-full max-w-md border border-gray-200">
         <h1 className="text-3xl font-extrabold text-gray-900 text-center mb-6">
           {isLogin ? 'Welcome Back 👋' : 'Create an Account'}
         </h1>
 
+        <label className="block text-sm font-medium text-gray-800 mb-1">Email</label>
         <input
           type="email"
-          placeholder="Email"
-          className="border border-gray-400 p-3 w-full mb-4 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+          placeholder="you@example.com"
+          className="border border-gray-400 p-3 w-full mb-4 rounded focus:outline-none focus:ring-2 focus:ring-blue-600 text-gray-900 placeholder-gray-500"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          autoComplete="email"
         />
 
+        <label className="block text-sm font-medium text-gray-800 mb-1">Password</label>
         <input
           type="password"
-          placeholder="Password"
-          className="border border-gray-400 p-3 w-full mb-4 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+          placeholder="••••••••"
+          className="border border-gray-400 p-3 w-full mb-2 rounded focus:outline-none focus:ring-2 focus:ring-blue-600 text-gray-900 placeholder-gray-500"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          autoComplete={isLogin ? 'current-password' : 'new-password'}
         />
+
+        {/* Row with Forgot Password (only in Login mode) */}
+        {isLogin && (
+          <div className="flex items-center justify-end mb-4">
+            <button
+              type="button"
+              onClick={handleForgotPassword}
+              className="text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
+            >
+              Forgot password?
+            </button>
+          </div>
+        )}
 
         <button
           onClick={handleAuth}
@@ -72,6 +104,7 @@ export default function LoginPage() {
           <button
             onClick={() => setIsLogin(!isLogin)}
             className="text-blue-700 underline font-medium hover:text-blue-900"
+            type="button"
           >
             {isLogin ? 'Sign Up' : 'Login'}
           </button>
