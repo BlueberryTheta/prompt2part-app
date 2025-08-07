@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabaseClient'
+'use client'
+
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabaseClient'
 
 export default function UpdatePassword() {
   const [newPassword, setNewPassword] = useState('')
