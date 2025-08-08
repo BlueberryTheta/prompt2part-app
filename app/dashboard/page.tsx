@@ -432,7 +432,7 @@ export default function DashboardPage() {
   }
 
   // === UI ===
-  return (
+ return (
   <div
     className={`flex flex-col lg:flex-row gap-6 p-6 min-h-screen transition-colors duration-300 ${
       darkMode ? 'bg-gray-950 text-gray-100' : 'bg-gray-100 text-gray-900'
@@ -481,7 +481,7 @@ export default function DashboardPage() {
           className={`border px-3 py-2 rounded w-full transition ${
             darkMode
               ? 'bg-gray-700 text-white border-gray-600'
-              : 'bg-white text-gray-900 border-gray-400'
+              : 'bg-white text-gray-900 border-gray-500'
           }`}
         >
           <option value={10}>10 (Low)</option>
@@ -497,7 +497,7 @@ export default function DashboardPage() {
       }`}>
         <h2 className="text-lg font-semibold mb-3">📁 Saved Projects</h2>
         {projects.length === 0 ? (
-          <p className="text-sm text-gray-500 dark:text-gray-400">No saved projects yet.</p>
+          <p className="text-sm text-gray-600 dark:text-gray-300">No saved projects yet.</p>
         ) : (
           <div className="space-y-2">
             {projects.map((project) => (
@@ -505,7 +505,7 @@ export default function DashboardPage() {
                 key={project.id}
                 className={`flex justify-between items-center p-3 rounded-lg border transition hover:shadow-md ${
                   darkMode
-                    ? 'bg-gray-700 border-gray-600 hover:bg-gray-600'
+                    ? 'bg-gray-750 bg-gray-700 border-gray-600 hover:bg-gray-650 hover:bg-gray-600'
                     : 'bg-gray-50 border-gray-400 hover:bg-gray-200'
                 }`}
               >
@@ -513,19 +513,19 @@ export default function DashboardPage() {
                 <div className="flex gap-3 text-sm font-medium">
                   <button
                     onClick={() => handleLoadProject(project.id)}
-                    className="text-green-600 dark:text-green-400 hover:underline"
+                    className="text-green-700 dark:text-green-300 hover:underline"
                   >
                     Load
                   </button>
                   <button
                     onClick={() => handleRename(project.id)}
-                    className="text-blue-600 dark:text-blue-400 hover:underline"
+                    className="text-blue-700 dark:text-blue-300 hover:underline"
                   >
                     Rename
                   </button>
                   <button
                     onClick={() => handleDelete(project.id)}
-                    className="text-red-600 dark:text-red-400 hover:underline"
+                    className="text-red-700 dark:text-red-300 hover:underline"
                   >
                     Delete
                   </button>
@@ -536,31 +536,47 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Chat */}
+      {/* Chat (HIGH CONTRAST) */}
       <div className={`shadow-md rounded-lg p-4 border flex flex-col gap-3 transition ${
-        darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+        darkMode
+          ? 'bg-gray-900 border-gray-700'
+          : 'bg-white border-gray-400'
       }`}>
-        <div ref={chatContainerRef} className="max-h-64 overflow-y-auto space-y-2">
-          {history.map((msg, i) => (
-            <div
-              key={i}
-              className={`p-3 rounded-lg text-sm ${
-                msg.role === 'user'
-                  ? 'bg-blue-100 dark:bg-blue-900'
-                  : 'bg-gray-100 dark:bg-gray-700'
-              }`}
-            >
-              <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong>{' '}
-              <span className="whitespace-pre-wrap">{msg.content}</span>
-            </div>
-          ))}
+        <div
+          ref={chatContainerRef}
+          className="max-h-64 overflow-y-auto space-y-2"
+        >
+          {history.map((msg, i) => {
+            const isUser = msg.role === 'user'
+            return (
+              <div
+                key={i}
+                className={`p-3 rounded-lg text-sm border ${
+                  isUser
+                    ? // USER bubble: strong indigo in both modes
+                      darkMode
+                      ? 'bg-indigo-600 text-white border-indigo-400'
+                      : 'bg-indigo-50 text-indigo-900 border-indigo-300'
+                    : // AI bubble: strong neutral contrast in both modes
+                      darkMode
+                      ? 'bg-gray-800 text-gray-100 border-gray-600'
+                      : 'bg-gray-50 text-gray-900 border-gray-300'
+                }`}
+              >
+                <strong className={`${isUser ? '' : ''}`}>
+                  {isUser ? 'You' : 'AI'}:
+                </strong>{' '}
+                <span className="whitespace-pre-wrap">{msg.content}</span>
+              </div>
+            )
+          })}
         </div>
 
         <textarea
-          className={`border px-3 py-2 w-full rounded transition ${
+          className={`border px-3 py-2 w-full rounded transition placeholder:opacity-80 ${
             darkMode
-              ? 'bg-gray-700 text-white border-gray-600'
-              : 'bg-white text-gray-900 border-gray-400'
+              ? 'bg-gray-800 text-white border-gray-600 placeholder:text-gray-300'
+              : 'bg-white text-gray-900 border-gray-500 placeholder:text-gray-600'
           }`}
           rows={3}
           value={userPrompt}
@@ -573,27 +589,27 @@ export default function DashboardPage() {
             type="button"
             onClick={handleSubmit}
             disabled={loading}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-medium transition"
+            className="bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded font-medium transition"
           >
             {loading ? 'Generating...' : 'Send'}
           </button>
           <button
             onClick={handleUndo}
             disabled={pastStates.length === 0}
-            className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
+            className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
           >
             Undo
           </button>
           <button
             onClick={handleRedo}
             disabled={futureStates.length === 0}
-            className="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
+            className="bg-indigo-700 hover:bg-indigo-800 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
           >
             Redo
           </button>
           <button
             onClick={handleNewProject}
-            className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded font-medium transition"
+            className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded font-medium transition"
           >
             🆕 New Project
           </button>
@@ -608,7 +624,7 @@ export default function DashboardPage() {
             <button
               onClick={handleSaveProject}
               disabled={!userPrompt && history.length === 0}
-              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
+              className="bg-green-700 hover:bg-green-800 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
             >
               Save as New Project
             </button>
@@ -619,7 +635,7 @@ export default function DashboardPage() {
 
     {/* RIGHT PANEL */}
     <div className={`lg:w-[40%] w-full p-4 shadow-md rounded-lg border space-y-4 transition ${
-      darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+      darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-400'
     }`}>
       <h2 className="font-bold text-lg">🧱 3D Preview</h2>
       {stlBlobUrl ? (
@@ -627,13 +643,13 @@ export default function DashboardPage() {
           <PartViewer stlUrl={stlBlobUrl} />
           <button
             onClick={handleDownload}
-            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-black transition font-medium"
+            className="bg-gray-900 text-white px-4 py-2 rounded hover:bg-black transition font-medium"
           >
             ⬇️ Download STL
           </button>
         </>
       ) : (
-        <div className="text-sm text-gray-500 dark:text-gray-400 italic">
+        <div className="text-sm text-gray-700 dark:text-gray-300 italic">
           Nothing to show yet. Submit a prompt to generate a model.
         </div>
       )}
