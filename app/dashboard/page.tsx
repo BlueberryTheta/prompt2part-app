@@ -433,82 +433,110 @@ export default function DashboardPage() {
 
   // === UI ===
   return (
-    <div className={`flex flex-col lg:flex-row gap-4 p-4 min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}>
-
-      {/* Left Panel */}
-      <div className="flex-1 space-y-6">
-        <div className="flex justify-between items-center mb-4">
-          <h1 className="text-xl font-bold">🛠️ Prompt2Part Dashboard</h1>
-          <div className="flex items-center space-x-2">
-            <span className="text-sm">{userEmail}</span>
-            <button
-              onClick={() => supabase.auth.signOut().then(() => router.push('/login'))}
-              className="text-blue-500 dark:text-blue-300 underline text-sm"
-            >
-              Logout
-            </button>
-            <button
-              onClick={() => setDarkMode(!darkMode)}
-              className="text-xs px-2 py-1 border border-gray-400 dark:border-gray-600 rounded"
-            >
-              {darkMode ? '☀️ Light' : '🌙 Dark'}
-            </button>
-          </div>
-        </div>
-
-        {showSaveSuccess && (
-          <div className="p-2 text-green-800 bg-green-100 border border-green-300 rounded dark:bg-green-900 dark:text-green-200">
-            ✅ Project saved successfully!
-          </div>
-        )}
-
-        <div>
-          <label htmlFor="resolution" className="text-sm font-medium">
-            Curve Resolution ($fn):
-          </label>
-          <select
-            id="resolution"
-            value={resolution}
-            onChange={e => setResolution(Number(e.target.value))}
-            className="ml-2 border px-2 py-1 rounded bg-white dark:bg-gray-700 dark:text-white"
+  <div
+    className={`flex flex-col lg:flex-row gap-6 p-6 min-h-screen transition-colors duration-300 ${
+      darkMode ? 'bg-gray-950 text-gray-100' : 'bg-gray-50 text-gray-900'
+    }`}
+  >
+    {/* LEFT PANEL */}
+    <div className="flex-1 space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center pb-3 border-b border-gray-300 dark:border-gray-700">
+        <h1 className="text-2xl font-bold">🛠️ Prompt2Part</h1>
+        <div className="flex items-center gap-3">
+          <span className="text-sm opacity-80">{userEmail}</span>
+          <button
+            onClick={() => supabase.auth.signOut().then(() => router.push('/login'))}
+            className="px-3 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-sm transition"
           >
-            <option value={10}>10 (Low)</option>
-            <option value={50}>50 (Medium)</option>
-            <option value={100}>100 (High)</option>
-            <option value={200}>200 (Very High)</option>
-          </select>
+            Logout
+          </button>
+          <button
+            onClick={() => setDarkMode(!darkMode)}
+            className="px-2 py-1 rounded border border-gray-400 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 text-xs transition"
+          >
+            {darkMode ? '☀️ Light' : '🌙 Dark'}
+          </button>
         </div>
+      </div>
 
-        <div>
-          <h2 className="text-lg font-semibold mb-2">📁 Saved Projects</h2>
-          {projects.length === 0 ? (
-            <p className="text-sm text-gray-600 dark:text-gray-400">No saved projects yet.</p>
-          ) : (
-            projects.map(project => (
-              <div key={project.id} className="flex justify-between items-center border border-gray-300 dark:border-gray-600 p-2 rounded bg-gray-50 dark:bg-gray-700">
+      {/* Save Success Message */}
+      {showSaveSuccess && (
+        <div className="p-3 rounded bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 border border-green-300 dark:border-green-700">
+          ✅ Project saved successfully!
+        </div>
+      )}
+
+      {/* Resolution Selector */}
+      <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+        <label htmlFor="resolution" className="text-sm font-medium block mb-2">
+          Curve Resolution ($fn)
+        </label>
+        <select
+          id="resolution"
+          value={resolution}
+          onChange={(e) => setResolution(Number(e.target.value))}
+          className="border px-3 py-2 rounded w-full bg-white dark:bg-gray-700 dark:text-white"
+        >
+          <option value={10}>10 (Low)</option>
+          <option value={50}>50 (Medium)</option>
+          <option value={100}>100 (High)</option>
+          <option value={200}>200 (Very High)</option>
+        </select>
+      </div>
+
+      {/* Saved Projects */}
+      <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+        <h2 className="text-lg font-semibold mb-3">📁 Saved Projects</h2>
+        {projects.length === 0 ? (
+          <p className="text-sm text-gray-500 dark:text-gray-400">No saved projects yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {projects.map((project) => (
+              <div
+                key={project.id}
+                className="flex justify-between items-center p-3 rounded-lg bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:shadow-md transition"
+              >
                 <span className="truncate">{project.title}</span>
-                <div className="space-x-2 text-sm">
-                  <button onClick={() => handleLoadProject(project.id)} className="text-green-600 dark:text-green-400 underline">Load</button>
-                  <button onClick={() => handleRename(project.id)} className="text-blue-600 dark:text-blue-400 underline">Rename</button>
-                  <button onClick={() => handleDelete(project.id)} className="text-red-600 dark:text-red-400 underline">Delete</button>
+                <div className="flex gap-3 text-sm">
+                  <button
+                    onClick={() => handleLoadProject(project.id)}
+                    className="text-green-600 dark:text-green-400 hover:underline"
+                  >
+                    Load
+                  </button>
+                  <button
+                    onClick={() => handleRename(project.id)}
+                    className="text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    onClick={() => handleDelete(project.id)}
+                    className="text-red-600 dark:text-red-400 hover:underline"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
-            ))
-          )}
-        </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-        {/* Chat area */}
+      {/* Chat */}
+      <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg p-4 border border-gray-200 dark:border-gray-700 flex flex-col gap-3">
         <div
           ref={chatContainerRef}
-          className="max-h-64 overflow-y-auto space-y-2 border border-gray-300 dark:border-gray-600 p-2 rounded bg-gray-50 dark:bg-gray-700"
+          className="max-h-64 overflow-y-auto space-y-2"
         >
           {history.map((msg, i) => (
             <div
               key={i}
-              className={`p-2 rounded text-sm ${
+              className={`p-3 rounded-lg text-sm ${
                 msg.role === 'user'
-                  ? 'bg-gray-200 dark:bg-gray-600'
-                  : 'bg-gray-100 dark:bg-gray-800'
+                  ? 'bg-blue-100 dark:bg-blue-900'
+                  : 'bg-gray-100 dark:bg-gray-700'
               }`}
             >
               <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong>{' '}
@@ -518,92 +546,81 @@ export default function DashboardPage() {
         </div>
 
         <textarea
-          className="border px-2 py-1 w-full rounded bg-white dark:bg-gray-700 dark:text-white"
+          className="border px-3 py-2 w-full rounded bg-white dark:bg-gray-700 dark:text-white"
           rows={3}
           value={userPrompt}
           onChange={(e) => setUserPrompt(e.target.value)}
-          placeholder="Describe your part, or answer the AI’s question…"
+          placeholder="Describe your part or answer the AI's question..."
         />
 
-        <div className="flex gap-2">
-          
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={handleSubmit}
             disabled={loading}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded transition"
           >
             {loading ? 'Generating...' : 'Send'}
           </button>
-
-          
-
-
           <button
             onClick={handleUndo}
             disabled={pastStates.length === 0}
-            className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded disabled:opacity-50"
+            className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded disabled:opacity-50 transition"
           >
             Undo
           </button>
-
           <button
             onClick={handleRedo}
             disabled={futureStates.length === 0}
-            className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+            className="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50 transition"
           >
             Redo
           </button>
-
           <button
             onClick={handleNewProject}
-            className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded"
-            >
+            className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded transition"
+          >
             🆕 New Project
           </button>
-
           {currentProjectId ? (
             <button
               onClick={handleUpdateProject}
-              className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded"
+              className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded transition"
             >
               Save Changes
             </button>
-            
           ) : (
             <button
               onClick={handleSaveProject}
               disabled={!userPrompt && history.length === 0}
-              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50"
+              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50 transition"
             >
               Save as New Project
             </button>
-
-
-
           )}
         </div>
       </div>
-
-      {/* Right Panel: 3D Viewer */}
-      <div className="lg:w-[40%] w-full p-4 bg-gray-100 dark:bg-gray-800 rounded space-y-4">
-        <h2 className="font-bold text-lg">🧱 3D Preview:</h2>
-        {stlBlobUrl ? (
-          <>
-            <PartViewer stlUrl={stlBlobUrl} />
-            <button
-              onClick={handleDownload}
-              className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
-            >
-              ⬇️ Download STL
-            </button>
-          </>
-        ) : (
-          <div className="text-sm text-gray-600 dark:text-gray-300 italic">
-            Nothing to show yet. Submit a prompt to generate a model.
-          </div>
-        )}
-      </div>
     </div>
-  )
+
+    {/* RIGHT PANEL */}
+    <div className="lg:w-[40%] w-full p-4 bg-white dark:bg-gray-800 shadow-sm rounded-lg border border-gray-200 dark:border-gray-700 space-y-4">
+      <h2 className="font-bold text-lg">🧱 3D Preview</h2>
+      {stlBlobUrl ? (
+        <>
+          <PartViewer stlUrl={stlBlobUrl} />
+          <button
+            onClick={handleDownload}
+            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-black transition"
+          >
+            ⬇️ Download STL
+          </button>
+        </>
+      ) : (
+        <div className="text-sm text-gray-500 dark:text-gray-400 italic">
+          Nothing to show yet. Submit a prompt to generate a model.
+        </div>
+      )}
+    </div>
+  </div>
+)
 }
