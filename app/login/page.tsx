@@ -42,8 +42,11 @@ export default function LoginPage() {
       setMessage('❌ Please enter your email to reset your password.')
       return
     }
+
+    console.log('Sending reset with redirectTo:', 'https://prompt2part-app.vercel.app/update-password')
+
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: 'https://prompt2part.vercel.app/update-password',
+      redirectTo: 'https://prompt2part-app.vercel.app/update-password',
     })
     if (error) {
       setMessage(`❌ ${error.message}`)
