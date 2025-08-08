@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import PartViewer from '../components/PartViewer'
+import { Spec } from '../api/generate/route'
 
 type ChatMsg = { role: 'user' | 'assistant'; content: string }
 
@@ -230,10 +231,14 @@ export default function DashboardPage() {
   }
 
   // === Submit ===
-  const handleSubmit = async () => {
+  // state:
+const [spec, setSpec] = useState<Spec>({ units: 'mm' })
+const [assumptions, setAssumptions] = useState<string[]>([])
+
+// handleSubmit:
+const handleSubmit = async () => {
   if (!userPrompt) return
   setLoading(true)
-  takeSnapshot()
 
   const baseHistory: ChatMsg[] = [...history, { role: 'user', content: userPrompt }]
 
@@ -242,64 +247,44 @@ export default function DashboardPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prompt: userPrompt, // ✅ plain text only
-        history: baseHistory,
+        prompt: userPrompt,
+        history: baseHistory, // chat as-is
+        spec,                  // 🚀 keep spec in the loop
       }),
     })
-
     const data = await res.json()
 
-    switch (data.type) {
-      case 'code':
-        {
-          const code = data.code || ''
-          const message = data.content || '✅ Updated the model.'
-          setResponse(code)
-          setCodeGenerated(true)
+    // Always show assistant_text
+    const assistantText = data?.assistant_text || 'Okay.'
+    setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
 
-          try {
-            const url = await renderStlFromCodeStrict(code, resolution)
-            setStlBlobUrl(url)
-            setHistory([...baseHistory, { role: 'assistant', content: message }])
-          } catch (renderErr: any) {
-            console.error('Render error:', renderErr)
-            setHistory([...baseHistory, {
-              role: 'assistant',
-              content: `❌ Render failed: ${String(renderErr?.message || renderErr)}`
-            }])
-            setStlBlobUrl(null)
-          }
-        }
-        break
+    // Always update spec if provided
+    if (data?.spec) setSpec(data.spec)
+    setAssumptions(data?.assumptions || [])
 
-      case 'questions':
-      case 'answer':
-      case 'nochange':
-        {
-          const message = data.content || 'ℹ️ Response from assistant.'
-          setHistory([...baseHistory, { role: 'assistant', content: message }])
-        }
-        break
+    if (data?.type === 'code' && data?.code) {
+      const code = data.code as string
+      setResponse(code)
+      setCodeGenerated(true)
 
-      default:
-        {
-          const fallback = data.content || '⚠️ Unknown response from assistant.'
-          setHistory([...baseHistory, { role: 'assistant', content: fallback }])
-        }
+      // Render STL
+      try {
+        const url = await renderStlFromCodeStrict(code, resolution)
+        setStlBlobUrl(url)
+      } catch (e: any) {
+        console.error('Render error:', e)
+      }
     }
 
     setUserPrompt('')
   } catch (err) {
-    console.error('Error:', err)
-    setHistory([...baseHistory, {
-      role: 'assistant',
-      content: '❌ Something went wrong. Please try again.'
-    }])
-    setStlBlobUrl(null)
+    console.error('Client submit error:', err)
+    setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
   } finally {
     setLoading(false)
   }
 }
+
 
 
   // === Projects: Save new / Update / Load / Rename / Delete ===
