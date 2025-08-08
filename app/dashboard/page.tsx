@@ -435,25 +435,25 @@ export default function DashboardPage() {
   return (
   <div
     className={`flex flex-col lg:flex-row gap-6 p-6 min-h-screen transition-colors duration-300 ${
-      darkMode ? 'bg-gray-950 text-gray-100' : 'bg-gray-50 text-gray-900'
+      darkMode ? 'bg-gray-950 text-gray-100' : 'bg-gray-100 text-gray-900'
     }`}
   >
     {/* LEFT PANEL */}
     <div className="flex-1 space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center pb-3 border-b border-gray-300 dark:border-gray-700">
+      <div className="flex justify-between items-center pb-3 border-b border-gray-400 dark:border-gray-700">
         <h1 className="text-2xl font-bold">🛠️ Prompt2Part</h1>
         <div className="flex items-center gap-3">
           <span className="text-sm opacity-80">{userEmail}</span>
           <button
             onClick={() => supabase.auth.signOut().then(() => router.push('/login'))}
-            className="px-3 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-sm transition"
+            className="px-3 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium shadow-sm transition"
           >
             Logout
           </button>
           <button
             onClick={() => setDarkMode(!darkMode)}
-            className="px-2 py-1 rounded border border-gray-400 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 text-xs transition"
+            className="px-2 py-1 rounded border border-gray-500 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 text-xs font-medium transition"
           >
             {darkMode ? '☀️ Light' : '🌙 Dark'}
           </button>
@@ -462,13 +462,15 @@ export default function DashboardPage() {
 
       {/* Save Success Message */}
       {showSaveSuccess && (
-        <div className="p-3 rounded bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 border border-green-300 dark:border-green-700">
+        <div className="p-3 rounded bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 border border-green-400 dark:border-green-700 shadow-sm">
           ✅ Project saved successfully!
         </div>
       )}
 
       {/* Resolution Selector */}
-      <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+      <div className={`shadow-md rounded-lg p-4 border transition ${
+        darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+      }`}>
         <label htmlFor="resolution" className="text-sm font-medium block mb-2">
           Curve Resolution ($fn)
         </label>
@@ -476,7 +478,11 @@ export default function DashboardPage() {
           id="resolution"
           value={resolution}
           onChange={(e) => setResolution(Number(e.target.value))}
-          className="border px-3 py-2 rounded w-full bg-white dark:bg-gray-700 dark:text-white"
+          className={`border px-3 py-2 rounded w-full transition ${
+            darkMode
+              ? 'bg-gray-700 text-white border-gray-600'
+              : 'bg-white text-gray-900 border-gray-400'
+          }`}
         >
           <option value={10}>10 (Low)</option>
           <option value={50}>50 (Medium)</option>
@@ -486,7 +492,9 @@ export default function DashboardPage() {
       </div>
 
       {/* Saved Projects */}
-      <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+      <div className={`shadow-md rounded-lg p-4 border transition ${
+        darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+      }`}>
         <h2 className="text-lg font-semibold mb-3">📁 Saved Projects</h2>
         {projects.length === 0 ? (
           <p className="text-sm text-gray-500 dark:text-gray-400">No saved projects yet.</p>
@@ -495,10 +503,14 @@ export default function DashboardPage() {
             {projects.map((project) => (
               <div
                 key={project.id}
-                className="flex justify-between items-center p-3 rounded-lg bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:shadow-md transition"
+                className={`flex justify-between items-center p-3 rounded-lg border transition hover:shadow-md ${
+                  darkMode
+                    ? 'bg-gray-700 border-gray-600 hover:bg-gray-600'
+                    : 'bg-gray-50 border-gray-400 hover:bg-gray-200'
+                }`}
               >
                 <span className="truncate">{project.title}</span>
-                <div className="flex gap-3 text-sm">
+                <div className="flex gap-3 text-sm font-medium">
                   <button
                     onClick={() => handleLoadProject(project.id)}
                     className="text-green-600 dark:text-green-400 hover:underline"
@@ -525,11 +537,10 @@ export default function DashboardPage() {
       </div>
 
       {/* Chat */}
-      <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg p-4 border border-gray-200 dark:border-gray-700 flex flex-col gap-3">
-        <div
-          ref={chatContainerRef}
-          className="max-h-64 overflow-y-auto space-y-2"
-        >
+      <div className={`shadow-md rounded-lg p-4 border flex flex-col gap-3 transition ${
+        darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+      }`}>
+        <div ref={chatContainerRef} className="max-h-64 overflow-y-auto space-y-2">
           {history.map((msg, i) => (
             <div
               key={i}
@@ -546,7 +557,11 @@ export default function DashboardPage() {
         </div>
 
         <textarea
-          className="border px-3 py-2 w-full rounded bg-white dark:bg-gray-700 dark:text-white"
+          className={`border px-3 py-2 w-full rounded transition ${
+            darkMode
+              ? 'bg-gray-700 text-white border-gray-600'
+              : 'bg-white text-gray-900 border-gray-400'
+          }`}
           rows={3}
           value={userPrompt}
           onChange={(e) => setUserPrompt(e.target.value)}
@@ -558,34 +573,34 @@ export default function DashboardPage() {
             type="button"
             onClick={handleSubmit}
             disabled={loading}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded transition"
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-medium transition"
           >
             {loading ? 'Generating...' : 'Send'}
           </button>
           <button
             onClick={handleUndo}
             disabled={pastStates.length === 0}
-            className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded disabled:opacity-50 transition"
+            className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
           >
             Undo
           </button>
           <button
             onClick={handleRedo}
             disabled={futureStates.length === 0}
-            className="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50 transition"
+            className="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
           >
             Redo
           </button>
           <button
             onClick={handleNewProject}
-            className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded transition"
+            className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded font-medium transition"
           >
             🆕 New Project
           </button>
           {currentProjectId ? (
             <button
               onClick={handleUpdateProject}
-              className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded transition"
+              className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded font-medium transition"
             >
               Save Changes
             </button>
@@ -593,7 +608,7 @@ export default function DashboardPage() {
             <button
               onClick={handleSaveProject}
               disabled={!userPrompt && history.length === 0}
-              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50 transition"
+              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
             >
               Save as New Project
             </button>
@@ -603,14 +618,16 @@ export default function DashboardPage() {
     </div>
 
     {/* RIGHT PANEL */}
-    <div className="lg:w-[40%] w-full p-4 bg-white dark:bg-gray-800 shadow-sm rounded-lg border border-gray-200 dark:border-gray-700 space-y-4">
+    <div className={`lg:w-[40%] w-full p-4 shadow-md rounded-lg border space-y-4 transition ${
+      darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+    }`}>
       <h2 className="font-bold text-lg">🧱 3D Preview</h2>
       {stlBlobUrl ? (
         <>
           <PartViewer stlUrl={stlBlobUrl} />
           <button
             onClick={handleDownload}
-            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-black transition"
+            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-black transition font-medium"
           >
             ⬇️ Download STL
           </button>
