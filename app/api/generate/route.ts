@@ -1,241 +1,242 @@
 // app/api/generate/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 
+/**
+ * ===== Model selection =====
+ * Defaults to GPT-5 for both steps, but you can override per-env if needed.
+ * On Vercel, set:
+ *   OPENAI_SPEC_MODEL=gpt-5
+ *   OPENAI_CODE_MODEL=gpt-5
+ *   OPENAI_API_KEY=sk-...
+ */
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
-const OPENAI_MODEL = 'gpt-4o' // or gpt-4o-mini
+const SPEC_MODEL = process.env.OPENAI_SPEC_MODEL || 'gpt-5'
+const CODE_MODEL = process.env.OPENAI_CODE_MODEL || 'gpt-5'
 
+// Basic message type for history passthrough
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
 
-// What we persist across turns
+// Your working Spec type
 export type Spec = {
   units?: 'mm' | 'inch'
   part_type?: string
-  overall?: { x?: number; y?: number; z?: number } // mm
+  overall?: { x?: number; y?: number; z?: number }
   features?: Array<
-    | { type: 'hole'; diameter?: number; position?: { x: number; y: number }; count?: number; through?: boolean; countersink?: boolean }
+    | { type: 'hole'; diameter?: number; count?: number; pattern?: string; positions?: Array<{ x: number; y: number }>; through?: boolean; countersink?: boolean }
     | { type: 'slot'; width?: number; length?: number; center?: { x: number; y: number }; angle?: number }
-    | { type: 'fillet'; radius?: number; edges?: 'all' | 'none' | 'some' }
-    | { type: 'chamfer'; size?: number; edges?: 'all' | 'none' | 'some' }
+    | { type: 'fillet'; radius?: number; edges?: string }
+    | { type: 'chamfer'; size?: number; edges?: string }
   >
+  mounting?: { surface?: string; holes?: number }
   tolerances?: { general?: number; hole_clearance?: number }
   notes?: string
 }
 
-type ApiReq = {
-  prompt: string
-  history?: Msg[]
-  spec?: Spec // last known spec from client
-}
-
-type ApiResp =
-  | {
-      type: 'answer' | 'questions' | 'code'
-      assistant_text: string // always provide something readable
-      spec: Spec // always echo back merged spec
-      assumptions?: string[] // when assistant applied small defaults
-      questions?: string[] // when more info is needed
-      code?: string // when we produced OpenSCAD
-      actions?: string[] // log what we did (merge, defaults, codegen)
-    }
-  | { error: string }
-
-function sysPromptClassifier() {
+// ---------- System prompts ----------
+function sysPromptSpec(): string {
   return `
-You are an intent classifier for a CAD assistant.
-Decide if the user's message is:
-- "question" (they're asking about design choices or best practices)
-- "change" (they want to modify or create the model)
-- "ambiguous" (not enough info to tell)
+You are a CAD requirements assistant. Your ONLY job is to:
+1) Read the user's request + prior spec, then produce an UPDATED structured SPEC JSON.
+2) Identify MISSING fields that prevent modeling.
+3) Ask TARGETED questions to fill the missing fields.
 
-Return STRICT JSON: {"intent":"question"|"change"|"ambiguous","reason":"<short>"}`
-    .trim()
-}
+IMPORTANT:
+- NEVER output code.
+- NEVER invent values. If unknown, leave null/omit and add to "missing" + "questions".
+- Default units to "mm" unless explicitly "inch".
 
-function sysPromptSpecMerge() {
-  return `
-You are a CAD spec editor. Merge the new user request into the existing SPEC.
-
-Rules:
-- Keep units consistent. Default to "mm" if not provided.
-- Minor defaults ALLOWED (safe assumptions) only when obvious (e.g., through hole means depth = thickness, hole at "center" -> overall midpoint).
-- For any assumption you make, add a concise explanation in "assumptions".
-- If required info is missing for code, add explicit items to "missing" and ask pointed "questions".
-- NEVER output code here.
-
-Output STRICT JSON:
+Return STRICT JSON, no markdown, with keys exactly:
 {
-  "spec": <merged spec>,
-  "assumptions": string[],
+  "spec": <Spec>,
   "missing": string[],
   "questions": string[]
-}`
-    .trim()
 }
 
-function sysPromptCode() {
+Validation rules:
+- If user mentions holes, require diameter, count, and either positions OR pattern+spacing. Ask if through/countersink.
+- For bracket/plate-like parts, require overall.x/y/z (mm).
+- Keep spec cumulative: merge previous spec with new info; do not discard known values.
+`.trim()
+}
+
+function sysPromptCode(): string {
   return `
-You are an OpenSCAD generator. Produce only valid OpenSCAD.
+You are an OpenSCAD generator. Produce ONLY valid OpenSCAD code for the given SPEC.
 
 Rules:
-- Use millimeters if units == "mm".
-- Start with clear named parameters.
-- Use difference() for holes/slots; respect positions, diameters, thickness, etc.
-- No prose. No Markdown. RETURN ONLY CODE.`
-    .trim()
+- Use mm if units == "mm".
+- Include concise comments.
+- Use named variables for key dims at the top.
+- If there are holes: respect positions & diameters; use translate()+cylinder() inside difference() for cuts.
+- Output ONLY code (no markdown, no fences, no prose). The response must be directly compilable by OpenSCAD.
+`.trim()
 }
 
-async function openai(messages: Msg[], max_tokens = 1200, temperature = 0.2) {
-  const res = await fetch(OPENAI_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({ model: OPENAI_MODEL, messages, max_tokens, temperature }),
-  })
-  const json = await res.json()
-  return json?.choices?.[0]?.message?.content ?? ''
+// ---------- Utilities ----------
+function stripCodeFences(s: string): string {
+  // remove ```...``` if the model "helps"
+  const m = s.match(/```(?:scad|openscad)?\n([\s\S]*?)```/i)
+  if (m) return m[1].trim()
+  return s.trim()
 }
 
-function safeParseJson(jsonish: string) {
-  // Extract largest JSON block if model added fluff
-  const match = jsonish.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('No JSON block found')
-  return JSON.parse(match[0])
-}
-
-function looksLikeSCAD(code: string) {
-  return /cube|cylinder|translate|difference|union|rotate|linear_extrude/i.test(code)
+function safeLog(label: string, payload: unknown, max = 1000) {
+  try {
+    const s = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2)
+    // eslint-disable-next-line no-console
+    console.log(`[generate] ${label}:`, s.length > max ? s.slice(0, max) + '…(truncated)' : s)
+  } catch {
+    // eslint-disable-next-line no-console
+    console.log(`[generate] ${label}: (unserializable)`)
+  }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, history = [], spec: incomingSpec = {} } = (await req.json()) as ApiReq
-
-    // 1) classify intent
-    const classifyMsg: Msg[] = [
-      { role: 'system', content: sysPromptClassifier() },
-      ...history,
-      { role: 'user', content: prompt },
-    ]
-    const clsRaw = await openai(classifyMsg, 200, 0.1)
-    let intent: 'question' | 'change' | 'ambiguous' = 'ambiguous'
-    try {
-      const parsed = safeParseJson(clsRaw)
-      intent = parsed.intent
-    } catch (e) {
-      // if classifier failed, consider ambiguous to be safe
-      intent = 'ambiguous'
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body.prompt !== 'string') {
+      return NextResponse.json({ error: 'Missing "prompt" in request body.' }, { status: 400 })
     }
 
-    // 2) handle pure question early (no spec change)
-    if (intent === 'question') {
-      // answer conversationally but succinctly
-      const qaMsg: Msg[] = [
-        {
-          role: 'system',
-          content:
-            'You are a helpful CAD assistant. Answer the user’s question briefly and concretely for 3D printable parts. No code, no JSON.',
-        },
-        ...history,
-        { role: 'user', content: prompt },
-      ]
-      const answer = await openai(qaMsg, 500, 0.3)
-      return NextResponse.json({
-        type: 'answer',
-        assistant_text: answer?.trim() || 'Here are a few suggestions.',
-        spec: incomingSpec,
-        actions: ['answered_question'],
-      } satisfies ApiResp)
+    const {
+      prompt,
+      history = [],
+      spec: currentSpec,
+    }: { prompt: string; history?: Msg[]; spec?: Spec } = body
+
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json({ error: 'Missing OPENAI_API_KEY on server.' }, { status: 500 })
     }
 
-    // 3) merge/update spec (for "change" or "ambiguous")
-    const mergeMsg: Msg[] = [
-      { role: 'system', content: sysPromptSpecMerge() },
+    // ---------- Stage A: SPEC extraction (GPT-5) ----------
+    const messagesA: Msg[] = [
+      { role: 'system', content: sysPromptSpec() },
+      ...(Array.isArray(history) ? history : []),
       {
         role: 'user',
-        content:
-          `EXISTING_SPEC:\n` +
-          JSON.stringify(incomingSpec || {}, null, 2) +
-          `\n\nUSER_REQUEST:\n` +
-          prompt,
+        content: `User says: ${prompt}\n\nExisting spec (if any): ${JSON.stringify(currentSpec || {})}`,
       },
     ]
-    const mergedRaw = await openai(mergeMsg, 900, 0.1)
 
-    let mergedSpec: Spec = incomingSpec
-    let assumptions: string[] = []
-    let missing: string[] = []
-    let questions: string[] = []
+    safeLog('STEP A model', SPEC_MODEL)
+    safeLog('STEP A messages', messagesA)
+
+    const resA = await fetch(OPENAI_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: SPEC_MODEL,
+        temperature: 0.1,
+        max_tokens: 900,
+        messages: messagesA,
+        // Force JSON output (supported on current GPT-5/4.1 stacks)
+        response_format: { type: 'json_object' },
+      }),
+    })
+
+    if (!resA.ok) {
+      const txt = await resA.text().catch(() => '')
+      safeLog('STEP A HTTP Error', { status: resA.status, txt })
+      return NextResponse.json({ error: `Spec step failed: ${resA.status} ${txt}` }, { status: 500 })
+    }
+
+    const dataA = await resA.json()
+    const contentA = dataA?.choices?.[0]?.message?.content?.trim() || '{}'
+    safeLog('STEP A raw content', contentA)
+
+    // Parse JSON strictly; fallback to best-effort if the model slipped
+    let jsonA: { spec?: Spec; missing?: string[]; questions?: string[] } = {}
     try {
-      const parsed = safeParseJson(mergedRaw)
-      mergedSpec = parsed.spec || incomingSpec
-      assumptions = parsed.assumptions || []
-      missing = parsed.missing || []
-      questions = parsed.questions || []
-    } catch (e: any) {
-      console.error('Spec merge parse error:', e?.message, mergedRaw)
-      return NextResponse.json({
-        error: 'Spec merge failed: invalid JSON',
-      } as ApiResp, { status: 500 })
+      jsonA = JSON.parse(contentA)
+    } catch {
+      const block = contentA.match(/\{[\s\S]*\}$/)?.[0]
+      if (!block) {
+        return NextResponse.json(
+          { error: '❌ Spec content includes invalid or partial JSON.' },
+          { status: 500 }
+        )
+      }
+      jsonA = JSON.parse(block)
     }
 
-    // If still missing info or ambiguous, ask questions (no code)
-    if (intent === 'ambiguous' || (missing.length > 0 || questions.length > 0)) {
-      const msg = [
-        assumptions.length ? `Assumptions applied:\n- ${assumptions.join('\n- ')}` : null,
-        missing.length ? `I still need:\n- ${missing.join('\n- ')}` : null,
-        questions.length ? `Questions:\n- ${questions.join('\n- ')}` : null,
-      ]
-        .filter(Boolean)
-        .join('\n\n')
+    const updatedSpec: Spec = jsonA.spec || {}
+    const missing: string[] = Array.isArray(jsonA.missing) ? jsonA.missing : []
+    const questions: string[] = Array.isArray(jsonA.questions) ? jsonA.questions : []
 
+    safeLog('STEP A parsed spec', updatedSpec)
+    safeLog('STEP A missing', missing)
+    safeLog('STEP A questions', questions)
+
+    if (missing.length > 0 || questions.length > 0) {
+      // We’re still clarifying; return questions to UI
       return NextResponse.json({
         type: 'questions',
-        assistant_text: msg || 'I need a bit more info.',
-        spec: mergedSpec,
-        assumptions,
+        spec: updatedSpec,
+        missing,
         questions,
-        actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults'],
-      } satisfies ApiResp)
+        content:
+          questions.length > 0
+            ? `Before I can generate the model, I need:\n- ${missing.join('\n- ')}\n\nQuestions:\n- ${questions.join('\n- ')}`
+            : `I still need:\n- ${missing.join('\n- ')}`,
+      })
     }
 
-    // 4) generate code if spec is good
-    const codeMsg: Msg[] = [
+    // ---------- Stage B: OpenSCAD code generation (GPT-5) ----------
+    const messagesB: Msg[] = [
       { role: 'system', content: sysPromptCode() },
-      { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}` },
+      { role: 'user', content: `SPEC:\n${JSON.stringify(updatedSpec, null, 2)}` },
     ]
-    const codeRaw = await openai(codeMsg, 1800, 0.15)
 
-    // strip fences if present
-    const code = (codeRaw || '')
-      .replace(/```(?:openscad|scad)?/gi, '```')
-      .replace(/^```/m, '')
-      .replace(/```$/m, '')
-      .trim()
+    safeLog('STEP B model', CODE_MODEL)
+    safeLog('STEP B messages', messagesB)
 
-    if (!looksLikeSCAD(code)) {
-      return NextResponse.json({
-        type: 'questions',
-        assistant_text: 'I still need a bit more info before I can safely generate code.',
-        spec: mergedSpec,
-        questions: ['Please clarify missing geometry details.'],
-        actions: ['merged_spec', 'code_check_failed'],
-      } satisfies ApiResp)
+    const resB = await fetch(OPENAI_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: CODE_MODEL,
+        temperature: 0.1,
+        max_tokens: 2000,
+        messages: messagesB,
+      }),
+    })
+
+    if (!resB.ok) {
+      const txt = await resB.text().catch(() => '')
+      safeLog('STEP B HTTP Error', { status: resB.status, txt })
+      return NextResponse.json({ error: `Code step failed: ${resB.status} ${txt}` }, { status: 500 })
     }
+
+    const dataB = await resB.json()
+    const rawCode = dataB?.choices?.[0]?.message?.content || ''
+    safeLog('STEP B raw code (truncated)', rawCode.slice(0, 1500))
+
+    // Remove code fences if the model added them
+    const code = stripCodeFences(rawCode)
+
+    // Quick sanity check that it looks like OpenSCAD
+    const isLikelySCAD = /cube|cylinder|translate|difference|union|rotate|linear_extrude|module/i.test(code)
 
     return NextResponse.json({
-      type: 'code',
-      assistant_text: assumptions.length
-        ? `Updated the model. I applied:\n- ${assumptions.join('\n- ')}`
-        : 'Updated the model.',
-      spec: mergedSpec,
-      assumptions,
-      code,
-      actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults', 'generated_code'],
-    } satisfies ApiResp)
+      type: isLikelySCAD ? 'code' : 'questions',
+      spec: updatedSpec,
+      code: isLikelySCAD ? code : null,
+      content: isLikelySCAD
+        ? 'Here is the OpenSCAD code based on your confirmed specifications.'
+        : 'I still need clarification before I can generate valid code.',
+    })
   } catch (err: any) {
-    console.error('🛑 /api/generate fatal error:', err?.message || err)
-    return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 })
+    // eslint-disable-next-line no-console
+    console.error('🛑 /api/generate fatal error:', err)
+    return NextResponse.json(
+      { error: err?.message || 'Server error' },
+      { status: 500 }
+    )
   }
 }
