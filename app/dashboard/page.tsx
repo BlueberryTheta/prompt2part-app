@@ -239,53 +239,72 @@ const [assumptions, setAssumptions] = useState<string[]>([])
 const handleSubmit = async () => {
   if (!userPrompt) return
   setLoading(true)
+  takeSnapshot()
 
   const baseHistory: ChatMsg[] = [...history, { role: 'user', content: userPrompt }]
 
   try {
+    const guidedPrompt = buildGuidedPrompt(response, userPrompt, resolution)
+
     const res = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prompt: userPrompt,
-        history: baseHistory, // chat as-is
-        spec,                  // 🚀 keep spec in the loop
+        prompt: guidedPrompt,
+        history: baseHistory,
+        // If you’re carrying a spec in state, pass it too:
+        // spec,
       }),
     })
+
     const data = await res.json()
+    // data = { type: 'code' | 'questions' | 'answer' | 'nochange', content: string, spec?: {...} }
 
-    // Always show assistant_text
-    const assistantText = data?.assistant_text || 'Okay.'
-    setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
-
-    // Always update spec if provided
-    if (data?.spec) setSpec(data.spec)
-    setAssumptions(data?.assumptions || [])
-
-    if (data?.type === 'code' && data?.code) {
-      const code = data.code as string
+    if (data.type === 'code' && typeof data.content === 'string' && data.content.trim().length > 0) {
+      // 🚀 We got raw OpenSCAD code back
+      const code = data.content
       setResponse(code)
       setCodeGenerated(true)
 
-      // Render STL
       try {
         const url = await renderStlFromCodeStrict(code, resolution)
         setStlBlobUrl(url)
-      } catch (e: any) {
-        console.error('Render error:', e)
+        setHistory([...baseHistory, { role: 'assistant', content: '✅ Updated the model.' }])
+      } catch (renderErr: any) {
+        console.error('Render error:', renderErr)
+        setHistory([
+          ...baseHistory,
+          { role: 'assistant', content: `❌ Render failed: ${String(renderErr?.message || renderErr)}` },
+        ])
+        setStlBlobUrl(null)
       }
+    } else if (data.type === 'questions') {
+      // 🗂️ Model needs more info
+      const text = data.content || 'I need a bit more detail to continue.'
+      setHistory([...baseHistory, { role: 'assistant', content: text }])
+    } else if (data.type === 'answer') {
+      // 💬 General Q&A response
+      const text = data.content || 'Okay.'
+      setHistory([...baseHistory, { role: 'assistant', content: text }])
+    } else if (data.type === 'nochange') {
+      // 🤷 No change (should be rare with the new backend)
+      const text = data.content || 'No updates were made.'
+      setHistory([...baseHistory, { role: 'assistant', content: text }])
+    } else {
+      // Fallback for anything unexpected
+      const text = data?.content || '⚠️ Unknown response from assistant.'
+      setHistory([...baseHistory, { role: 'assistant', content: text }])
     }
 
     setUserPrompt('')
   } catch (err) {
-    console.error('Client submit error:', err)
-    setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
+    console.error('Error:', err)
+    setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong. Please try again.' }])
+    setStlBlobUrl(null)
   } finally {
     setLoading(false)
   }
 }
-
-
 
   // === Projects: Save new / Update / Load / Rename / Delete ===
   const refreshProjects = async () => {
