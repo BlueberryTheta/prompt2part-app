@@ -2,17 +2,17 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
-/** Exported so the dashboard can import its shape */
+// Exported so your dashboard can import its shape if needed
 export interface Spec {
-  width?: number;
-  height?: number;
-  depth?: number;
-  thickness?: number;
-  diameter?: number;
-  shape?: string;
+  width?: number;     // mm
+  height?: number;    // mm
+  depth?: number;     // mm (AKA length)
+  thickness?: number; // mm
+  diameter?: number;  // mm (for center hole)
+  shape?: string;     // e.g., 'bracket','plate'
   material?: string;
-  features?: string[]; // e.g., ["hole_center", "slots"]
-  units?: string;      // "mm"|"inch"|free text
+  features?: string[]; // e.g., ['hole_center','slots']
+  units?: string;      // 'mm'|'inch' (we convert to mm internally)
 }
 
 interface ChatMsg {
@@ -29,38 +29,188 @@ interface AIResponse {
 const MODEL = process.env.OPENAI_MODEL || "gpt-5";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-/**
- * Pull out the actual instruction when the frontend sends a templated prompt.
- * Looks for `### USER_REQUEST` ... until next `###` or EOF.
- */
-function extractUserRequest(raw: string): string {
-  try {
-    const marker = /###\s*USER_REQUEST\s*([\s\S]*?)(?:\n###|\r\n###|$)/i;
-    const m = raw.match(marker);
-    if (m && m[1]) {
-      return m[1].trim();
-    }
-  } catch (_) {}
-  // fallback: return raw
-  return (raw || "").trim();
+// ---------- Utilities ----------
+function mmFromInches(inVal: number) {
+  return inVal * 25.4;
+}
+
+function toNumber(x: string) {
+  const n = parseFloat(x);
+  return isFinite(n) ? n : undefined;
 }
 
 /**
- * Extremely simple heuristic: does the instruction likely request a model change?
+ * Extract the actual user request from your templated prompt.
+ * Looks for `### USER_REQUEST` ... until next `###` or EOF.
+ */
+function extractUserRequest(raw: string): string {
+  if (!raw) return "";
+  const marker = /###\s*USER_REQUEST\s*([\s\S]*?)(?:\n###|\r\n###|$)/i;
+  const m = raw.match(marker);
+  if (m && m[1]) return m[1].trim();
+  return raw.trim();
+}
+
+/**
+ * Heuristic: does the sentence look like a modeling instruction?
  */
 function seemsLikeModelUpdate(text: string): boolean {
   const t = (text || "").toLowerCase();
   if (!t) return false;
-  // verbs and tokens that usually imply geometry changes
   const cues = [
     "make ", "create ", "generate ", "add ", "remove ", "change ", "update ",
-    "increase", "decrease", "hole", "slot", "bracket", "plate", "fillet", "chamfer",
-    "diameter", "radius", "length", "width", "height", "thickness", "translate", "extrude",
+    "increase", "decrease",
+    "hole", "slot", "bracket", "plate", "box",
+    "fillet", "chamfer",
+    "diameter", "radius", "length", "width", "height", "thickness",
     "cylinder", "cube", "difference", "union"
   ];
   return cues.some(c => t.includes(c));
 }
 
+/**
+ * Try to parse common dimension patterns like:
+ *  - 3" x 3" x 0.5"
+ *  - 76.2mm x 76.2mm x 12.7mm
+ *  - "3 by 3 by 0.5 inch"
+ */
+function parseDims(user: string): Partial<Spec> {
+  const out: Partial<Spec> = {};
+  const t = user.toLowerCase().replace(/\s+/g, " ").trim();
+
+  // Pattern: 3" x 3" x 0.5"
+  const reInchesTriple = /(\d+(\.\d+)?)["in]*\s*[x×]\s*(\d+(\.\d+)?)["in]*\s*[x×]\s*(\d+(\.\d+)?)["in]*/i;
+  const mTripleIn = t.match(reInchesTriple);
+  if (mTripleIn) {
+    const a = toNumber(mTripleIn[1]);
+    const b = toNumber(mTripleIn[3]);
+    const c = toNumber(mTripleIn[5]);
+    if (a && b && c) {
+      out.width = mmFromInches(a);
+      out.height = mmFromInches(b);
+      out.thickness = mmFromInches(c);
+      out.units = "mm";
+      return out;
+    }
+  }
+
+  // Pattern: 76.2mm x 76.2mm x 12.7mm
+  const reMmTriple = /(\d+(\.\d+)?)\s*mm\s*[x×]\s*(\d+(\.\d+)?)\s*mm\s*[x×]\s*(\d+(\.\d+)?)\s*mm/;
+  const mTripleMm = t.match(reMmTriple);
+  if (mTripleMm) {
+    const a = toNumber(mTripleMm[1]);
+    const b = toNumber(mTripleMm[3]);
+    const c = toNumber(mTripleMm[5]);
+    if (a && b && c) {
+      out.width = a;
+      out.height = b;
+      out.thickness = c;
+      out.units = "mm";
+      return out;
+    }
+  }
+
+  // Single thickness like “0.5 inch thick” or “12.7mm thick”
+  const singleIn = t.match(/(\d+(\.\d+)?)\s*(?:["in]|inch(?:es)?)[^\d]*thick/);
+  if (singleIn) {
+    out.thickness = mmFromInches(parseFloat(singleIn[1]));
+    out.units = "mm";
+  }
+  const singleMm = t.match(/(\d+(\.\d+)?)\s*mm[^\d]*thick/);
+  if (singleMm) {
+    out.thickness = parseFloat(singleMm[1]);
+    out.units = "mm";
+  }
+
+  // “3 inch square plate” => width/height both 3 inches
+  const squareIn = t.match(/(\d+(\.\d+)?)\s*(?:["in]|inch(?:es)?)\s*(square|plate|bracket)/);
+  if (squareIn) {
+    const val = mmFromInches(parseFloat(squareIn[1]));
+    out.width = val;
+    out.height = val;
+    out.units = "mm";
+  }
+  const squareMm = t.match(/(\d+(\.\d+)?)\s*mm\s*(square|plate|bracket)/);
+  if (squareMm) {
+    const val = parseFloat(squareMm[1]);
+    out.width = val;
+    out.height = val;
+    out.units = "mm";
+  }
+
+  // Fallback: if a single quoted number appears like 3" or 0.5"
+  const firstIn = t.match(/(\d+(\.\d+)?)\s*(?:["in]|inch(?:es)?)/);
+  if (firstIn && out.width === undefined && out.height === undefined) {
+    const val = mmFromInches(parseFloat(firstIn[1]));
+    out.width = val;
+    out.height = val;
+    out.units = "mm";
+  }
+
+  return out;
+}
+
+/**
+ * Parse a hole request (center hole diameter). Supports:
+ *  - "add a 1\" hole"
+ *  - "add a 25.4mm hole"
+ *  - "through hole" (we always do through)
+ */
+function parseHole(user: string): Partial<Spec> {
+  const out: Partial<Spec> = {};
+  const t = user.toLowerCase();
+
+  if (t.includes("hole")) {
+    // diameter in inches
+    const dIn = t.match(/(\d+(\.\d+)?)\s*(?:["in]|inch(?:es)?)\s*(?:hole|diameter)/);
+    if (dIn) {
+      out.diameter = mmFromInches(parseFloat(dIn[1]));
+      out.units = "mm";
+    }
+    // diameter in mm
+    const dMm = t.match(/(\d+(\.\d+)?)\s*mm\s*(?:hole|diameter)/);
+    if (dMm) {
+      out.diameter = parseFloat(dMm[1]);
+      out.units = "mm";
+    }
+
+    // default feature hint
+    out.features = Array.from(new Set([...(out.features || []), "hole_center"]));
+  }
+
+  return out;
+}
+
+/**
+ * Make a basic OpenSCAD plate (width x height x thickness) with optional center through-hole.
+ */
+function generatePlateCode(spec: Spec): string {
+  const w = spec.width ?? 60;
+  const h = spec.height ?? 60;
+  const t = spec.thickness ?? spec.depth ?? 6;
+  const d = spec.diameter;
+
+  // center the hole at (w/2, h/2). Through hole = height t.
+  const body = `// Parameters (mm)
+width = ${w};
+height = ${h};
+thickness = ${t};
+${d ? `hole_diameter = ${d};` : ""}
+
+// Main body
+module plate() {
+  cube([width, height, thickness], center=false);
+}
+
+difference() {
+  plate();
+  ${d ? `translate([width/2, height/2, -1]) cylinder(h = thickness + 2, d = hole_diameter, center=false);` : "// no hole"}
+}
+`;
+  return body.trim() + "\n";
+}
+
+// ---------- Handler ----------
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -70,175 +220,216 @@ export async function POST(req: Request) {
       currentSpec = {},
     }: { userPrompt: string; history?: ChatMsg[]; currentSpec?: Spec } = body;
 
-    // Pull the real instruction out of the templated prompt if present
     const userRequest = extractUserRequest(userPrompt);
     const hasPriorCode = /###\s*CURRENT_OPENSCAD/i.test(userPrompt);
     const likelyUpdate = seemsLikeModelUpdate(userRequest) || hasPriorCode;
 
-    console.log("📥 /api/generate input:", {
+    console.log("📩 generate input", {
+      userRequest,
       hasPriorCode,
       likelyUpdate,
-      userRequest,
       historyLen: history.length,
       currentSpec,
       model: MODEL,
     });
 
-    // --- Step 1: classify intent (but give the model the CLEAN request) ---
-    const intentPrompt = `
-You are the AI for Prompt2Part (OpenSCAD assistant).
-
-Given:
-- Conversation history: ${JSON.stringify(history)}
-- Current spec (optional): ${JSON.stringify(currentSpec)}
-- New user request (cleaned): "${userRequest}"
-
-Return exactly one word:
-- update_model   (user wants to change/add details of the model)
-- clarification  (more info is needed before modeling)
-- question       (general question not changing the model)
-- nochange       (no change requested)
-`;
-
+    // 1) INTENT (clean request only)
     let intent = "nochange";
     try {
+      const intentPrompt = `
+You are the intent classifier for a CAD assistant.
+
+History (compact): ${JSON.stringify(history)}
+CurrentSpec: ${JSON.stringify(currentSpec)}
+Request: "${userRequest}"
+
+Return exactly one token:
+- update_model
+- clarification
+- question
+- nochange
+`;
       const intentRes = await openai.responses.create({
         model: MODEL,
         input: intentPrompt,
+        // Only this is supported on GPT-5
         max_output_tokens: 32,
       });
       intent = (intentRes.output_text || "").trim().toLowerCase();
     } catch (e: any) {
-      console.warn("⚠️ intent step failed, falling back to heuristic:", e?.message || e);
+      console.warn("⚠️ intent step failed:", e?.message || e);
     }
 
-    // If model says nochange but our heuristics scream "update", override.
+    // Heuristic override
     if (intent === "nochange" && likelyUpdate) {
       console.log("🔧 Overriding intent -> update_model (heuristic)");
       intent = "update_model";
     }
-
     console.log("🎯 intent:", intent);
 
-    // --- Step 2: handle general question ---
+    // 2) QUESTION
     if (intent === "question") {
-      const answerPrompt = `
-Answer the user's question concisely in the context of a CAD/OpenSCAD workflow.
-
-Question: "${userRequest}"
-`;
-      const answerRes = await openai.responses.create({
-        model: MODEL,
-        input: answerPrompt,
-        max_output_tokens: 400,
-      });
-      const text = (answerRes.output_text || "").trim();
-      return NextResponse.json({
-        type: "answer",
-        content: text || "Okay.",
-      } as AIResponse);
+      try {
+        const answerRes = await openai.responses.create({
+          model: MODEL,
+          input: `Answer concisely in the context of OpenSCAD/CAD:\n\nQ: "${userRequest}"`,
+          max_output_tokens: 400,
+        });
+        const text = (answerRes.output_text || "").trim();
+        return NextResponse.json({
+          type: "answer",
+          content: text || "Okay.",
+        } as AIResponse);
+      } catch (e: any) {
+        // Fallback: generic answer
+        return NextResponse.json({
+          type: "answer",
+          content: "Okay.",
+        } as AIResponse);
+      }
     }
 
-    // --- Step 3: if clarification needed, ask targeted questions ---
+    // 3) CLARIFICATION
     if (intent === "clarification") {
-      const clarificationPrompt = `
-You are refining a 3D model specification for OpenSCAD.
+      try {
+        const askRes = await openai.responses.create({
+          model: MODEL,
+          input: `
+We need targeted questions to finalize a model spec.
 
-Current spec: ${JSON.stringify(currentSpec)}
-User request: "${userRequest}"
+Spec so far: ${JSON.stringify(currentSpec)}
+User said: "${userRequest}"
 
-Ask ONLY the missing, targeted questions required to produce a clear, complete spec. Keep it short.
-`;
-      const clarifyRes = await openai.responses.create({
-        model: MODEL,
-        input: clarificationPrompt,
-        max_output_tokens: 240,
-      });
-      const questions = (clarifyRes.output_text || "").trim();
-      return NextResponse.json({
-        type: "questions",
-        content: questions || "Could you clarify the missing dimensions?",
-        spec: currentSpec,
-      } as AIResponse);
+Ask only what is missing in 1–3 short bullets.
+`,
+          max_output_tokens: 200,
+        });
+        const text = (askRes.output_text || "").trim();
+        return NextResponse.json({
+          type: "questions",
+          spec: currentSpec,
+          content: text || "Could you clarify the missing dimensions?",
+        } as AIResponse);
+      } catch {
+        return NextResponse.json({
+          type: "questions",
+          spec: currentSpec,
+          content: "Could you clarify the missing dimensions?",
+        } as AIResponse);
+      }
     }
 
-    // --- Step 4: apply model updates ---
+    // 4) UPDATE MODEL (LLM + deterministic fallback)
     if (intent === "update_model") {
-      const specPrompt = `
-You are updating a JSON spec for an OpenSCAD model.
-
-Allowed keys (all optional): width, height, depth, thickness, diameter, shape, material, features, units.
-- Only include fields that are newly provided or confidently updated by the user's message.
-- Do NOT include guesses.
-- Respond with STRICT JSON only (no markdown, no comments).
-
-Current spec: ${JSON.stringify(currentSpec)}
-User request: "${userRequest}"
-
-Return JSON with the updated fields (partial is fine).
-`;
+      // Try a compact LLM delta update first
       let delta: Spec = {};
       try {
         const specRes = await openai.responses.create({
           model: MODEL,
-          input: specPrompt,
+          input: `
+Update this JSON spec based ONLY on info clearly provided by the user's request.
+Allowed keys: width,height,depth,thickness,diameter,shape,material,features,units.
+Return STRICT JSON (no prose). Do NOT guess.
+
+CurrentSpec: ${JSON.stringify(currentSpec)}
+UserRequest: "${userRequest}"
+`,
           max_output_tokens: 240,
         });
         const raw = (specRes.output_text || "").trim();
         try {
           delta = JSON.parse(raw);
         } catch {
-          console.warn("⚠️ Could not parse spec JSON. Raw:", raw);
+          console.warn("⚠️ Could not parse LLM spec JSON. Raw:", raw);
           delta = {};
         }
       } catch (e: any) {
-        console.error("❌ spec step failed:", e?.response?.data || e?.message || e);
-        // If spec step fails, still try to generate code from current spec + request
-        delta = {};
+        console.warn("⚠️ spec LLM failed:", e?.message || e);
       }
 
-      // Merge deltas; ensure units default to "mm" if not set
-      const merged: Spec = { units: "mm", ...(currentSpec || {}), ...(delta || {}) };
-      console.log("🛠 mergedSpec:", merged);
+      // Deterministic fallback parse:
+      const dims = parseDims(userRequest);
+      const hole = parseHole(userRequest);
 
-      // If literally nothing changed and we had no prior spec, don't pretend
-      const changed = Object.keys(delta || {}).length > 0;
-      if (!changed && !likelyUpdate) {
+      const merged: Spec = {
+        units: "mm",
+        ...(currentSpec || {}),
+        ...(delta || {}),
+        ...dims,
+        ...hole,
+      };
+
+      const changed =
+        Object.keys(delta).length > 0 ||
+        Object.keys(dims).length > 0 ||
+        Object.keys(hole).length > 0;
+
+      console.log("🧩 merged", merged, "changed?", changed);
+
+      // If STILL nothing changed but we believe it's an update, produce a sane base plate
+      if (!changed && likelyUpdate) {
+        console.log("🪄 Using deterministic base-plate fallback.");
+        const code = generatePlateCode(merged);
         return NextResponse.json({
-          type: "nochange",
+          type: "code",
           spec: merged,
-          content: "No updates were made.",
+          content: code,
         } as AIResponse);
       }
 
-      // --- Step 5: Generate OpenSCAD code from the merged spec ---
-      const codePrompt = `
-Generate valid OpenSCAD code for this spec. Use ${merged.units || "mm"} for units.
+      // If there are changes, ask GPT-5 to produce code — with a fallback to deterministic
+      if (changed) {
+        try {
+          const codeRes = await openai.responses.create({
+            model: MODEL,
+            input: `
+Generate OpenSCAD for this spec. Use mm.
 
-Spec (JSON):
+Spec:
 ${JSON.stringify(merged)}
 
-Requirements:
-- Produce ONLY OpenSCAD code (no prose).
-- Define named variables at the top for main dimensions (width, height, depth/thickness, etc., as applicable).
-- If holes are implied by diameter and center placement, subtract a cylinder at the middle; if features mention "hole_center", use a through hole.
-- Ensure code compiles as-is, and renders the main body + any holes/slots.
-`;
-      const codeRes = await openai.responses.create({
-        model: MODEL,
-        input: codePrompt,
-        max_output_tokens: 1000,
-      });
+Rules:
+- Output ONLY OpenSCAD code (no prose).
+- Define variables at top for major dims.
+- If "diameter" exists and "features" includes "hole_center", subtract a through cylinder at plate center.
+- Ensure compilable code.
+`,
+            max_output_tokens: 1000,
+          });
+          const code = (codeRes.output_text || "").trim();
+          if (code && /cube|cylinder|difference|union/i.test(code)) {
+            return NextResponse.json({
+              type: "code",
+              spec: merged,
+              content: code,
+            } as AIResponse);
+          }
+          // If code is empty or suspicious, fallback
+          const fallbackCode = generatePlateCode(merged);
+          return NextResponse.json({
+            type: "code",
+            spec: merged,
+            content: fallbackCode,
+          } as AIResponse);
+        } catch {
+          const fallbackCode = generatePlateCode(merged);
+          return NextResponse.json({
+            type: "code",
+            spec: merged,
+            content: fallbackCode,
+          } as AIResponse);
+        }
+      }
 
-      const code = (codeRes.output_text || "").trim();
+      // No change
       return NextResponse.json({
-        type: "code",
+        type: "nochange",
         spec: merged,
-        content: code || "// No code produced.",
+        content: "No updates were made.",
       } as AIResponse);
     }
 
-    // --- default: nochange ---
+    // 5) Default
     return NextResponse.json({
       type: "nochange",
       spec: { units: "mm", ...(currentSpec || {}) },
