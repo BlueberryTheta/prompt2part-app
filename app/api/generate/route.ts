@@ -2,17 +2,19 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
-// Exported so your dashboard can import its shape if needed
+export const dynamic = "force-dynamic"; // make sure it's not cached during testing
+
+// ---------- Types ----------
 export interface Spec {
   width?: number;     // mm
   height?: number;    // mm
-  depth?: number;     // mm (AKA length)
+  depth?: number;     // mm (aka length)
   thickness?: number; // mm
-  diameter?: number;  // mm (for center hole)
-  shape?: string;     // e.g., 'bracket','plate'
+  diameter?: number;  // mm (center hole)
+  shape?: string;     // 'bracket' | 'plate' | ...
   material?: string;
-  features?: string[]; // e.g., ['hole_center','slots']
-  units?: string;      // 'mm'|'inch' (we convert to mm internally)
+  features?: string[];
+  units?: string;     // 'mm'|'inch' (we normalize to mm)
 }
 
 interface ChatMsg {
@@ -26,65 +28,86 @@ interface AIResponse {
   content: string; // code or text
 }
 
+// ---------- Model ----------
 const MODEL = process.env.OPENAI_MODEL || "gpt-5";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-// ---------- Utilities ----------
-function mmFromInches(inVal: number) {
-  return inVal * 25.4;
+// ---------- Small utils ----------
+const mmFromInches = (n: number) => n * 25.4;
+const toNum = (s?: string) => {
+  if (!s) return undefined;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : undefined;
+};
+
+// Robustly extract the freeform request the user typed (not your template).
+function extractUserRequest(raw: string, history: ChatMsg[]): string {
+  if (!raw) {
+    const lastUser = [...history].reverse().find(m => m.role === "user");
+    return (lastUser?.content || "").trim();
+  }
+
+  // Normalize newlines
+  const text = raw.replace(/\r\n/g, "\n");
+
+  // Primary: block after ### USER_REQUEST
+  const header = /###\s*USER_REQUEST\s*?\n/i;
+  const hdr = text.match(header);
+  if (hdr) {
+    const start = hdr.index! + hdr[0].length;
+    // find next ### or end
+    const after = text.slice(start);
+    const nextHeaderIdx = after.search(/\n###\s*[A-Z_ ]+/i);
+    const slice = nextHeaderIdx >= 0 ? after.slice(0, nextHeaderIdx) : after;
+    const req = slice.trim();
+    if (req) return req;
+  }
+
+  // Secondary: try to find fenced code and take the prose outside of it
+  const noCode = text.replace(/```[\s\S]*?```/g, "").trim();
+  if (noCode) {
+    // take the last non-empty line as the request
+    const lines = noCode.split("\n").map(l => l.trim()).filter(Boolean);
+    const last = lines[lines.length - 1];
+    if (last) return last;
+  }
+
+  // Last resort: last user message in history
+  const lastUser = [...history].reverse().find(m => m.role === "user");
+  return (lastUser?.content || "").trim();
 }
 
-function toNumber(x: string) {
-  const n = parseFloat(x);
-  return isFinite(n) ? n : undefined;
-}
-
-/**
- * Extract the actual user request from your templated prompt.
- * Looks for `### USER_REQUEST` ... until next `###` or EOF.
- */
-function extractUserRequest(raw: string): string {
-  if (!raw) return "";
-  const marker = /###\s*USER_REQUEST\s*([\s\S]*?)(?:\n###|\r\n###|$)/i;
-  const m = raw.match(marker);
-  if (m && m[1]) return m[1].trim();
-  return raw.trim();
-}
-
-/**
- * Heuristic: does the sentence look like a modeling instruction?
- */
-function seemsLikeModelUpdate(text: string): boolean {
+// Heuristics: does it sound like a geometry change?
+function looksLikeUpdate(text: string): boolean {
   const t = (text || "").toLowerCase();
   if (!t) return false;
-  const cues = [
-    "make ", "create ", "generate ", "add ", "remove ", "change ", "update ",
-    "increase", "decrease",
-    "hole", "slot", "bracket", "plate", "box",
-    "fillet", "chamfer",
-    "diameter", "radius", "length", "width", "height", "thickness",
-    "cylinder", "cube", "difference", "union"
-  ];
-  return cues.some(c => t.includes(c));
+
+  // obvious “question” cues (we’ll keep updates if numeric/dims are present)
+  const questionCue = /\b(what|how|why|can|should|could|ideas|improve|better)\b/;
+  const hasQuestion = questionCue.test(t);
+
+  // numbers + units or geometry verbs
+  const unitOrDims = /(\d+(\.\d+)?)\s*(mm|cm|in|inch|")|(\d+(\.\d+)?\s*[x×]\s*\d+(\.\d+)?)/i;
+  const geoWords = /\b(add|make|create|generate|remove|change|update|increase|decrease|hole|slot|fillet|chamfer|bracket|plate|cube|cylinder|difference|union)\b/;
+
+  const hasDims = unitOrDims.test(t);
+  const hasGeo = geoWords.test(t);
+
+  // If it looks like geometry, treat as update even if it's phrased as a question
+  return hasDims || hasGeo || (!hasQuestion && t.length > 0);
 }
 
-/**
- * Try to parse common dimension patterns like:
- *  - 3" x 3" x 0.5"
- *  - 76.2mm x 76.2mm x 12.7mm
- *  - "3 by 3 by 0.5 inch"
- */
+// Parse common dim patterns quickly
 function parseDims(user: string): Partial<Spec> {
   const out: Partial<Spec> = {};
-  const t = user.toLowerCase().replace(/\s+/g, " ").trim();
+  const t = (user || "").toLowerCase().replace(/\s+/g, " ").trim();
 
-  // Pattern: 3" x 3" x 0.5"
-  const reInchesTriple = /(\d+(\.\d+)?)["in]*\s*[x×]\s*(\d+(\.\d+)?)["in]*\s*[x×]\s*(\d+(\.\d+)?)["in]*/i;
-  const mTripleIn = t.match(reInchesTriple);
-  if (mTripleIn) {
-    const a = toNumber(mTripleIn[1]);
-    const b = toNumber(mTripleIn[3]);
-    const c = toNumber(mTripleIn[5]);
+  // 3" x 3" x 0.5"
+  const inTriple = t.match(/(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)\s*[x×]\s*(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)\s*[x×]\s*(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)/i);
+  if (inTriple) {
+    const a = toNum(inTriple[1]);
+    const b = toNum(inTriple[3]);
+    const c = toNum(inTriple[5]);
     if (a && b && c) {
       out.width = mmFromInches(a);
       out.height = mmFromInches(b);
@@ -94,104 +117,72 @@ function parseDims(user: string): Partial<Spec> {
     }
   }
 
-  // Pattern: 76.2mm x 76.2mm x 12.7mm
-  const reMmTriple = /(\d+(\.\d+)?)\s*mm\s*[x×]\s*(\d+(\.\d+)?)\s*mm\s*[x×]\s*(\d+(\.\d+)?)\s*mm/;
-  const mTripleMm = t.match(reMmTriple);
-  if (mTripleMm) {
-    const a = toNumber(mTripleMm[1]);
-    const b = toNumber(mTripleMm[3]);
-    const c = toNumber(mTripleMm[5]);
+  // 76.2mm x 76.2mm x 12.7mm
+  const mmTriple = t.match(/(\d+(\.\d+)?)\s*mm\s*[x×]\s*(\d+(\.\d+)?)\s*mm\s*[x×]\s*(\d+(\.\d+)?)\s*mm/i);
+  if (mmTriple) {
+    const a = toNum(mmTriple[1]);
+    const b = toNum(mmTriple[3]);
+    const c = toNum(mmTriple[5]);
     if (a && b && c) {
-      out.width = a;
-      out.height = b;
-      out.thickness = c;
-      out.units = "mm";
+      out.width = a; out.height = b; out.thickness = c; out.units = "mm";
       return out;
     }
   }
 
-  // Single thickness like “0.5 inch thick” or “12.7mm thick”
-  const singleIn = t.match(/(\d+(\.\d+)?)\s*(?:["in]|inch(?:es)?)[^\d]*thick/);
-  if (singleIn) {
-    out.thickness = mmFromInches(parseFloat(singleIn[1]));
-    out.units = "mm";
+  // “square plate 3 in”
+  const sqIn = t.match(/(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)\s*(square|plate|bracket)/);
+  if (sqIn) {
+    const v = mmFromInches(parseFloat(sqIn[1]));
+    out.width = v; out.height = v; out.units = "mm";
   }
-  const singleMm = t.match(/(\d+(\.\d+)?)\s*mm[^\d]*thick/);
-  if (singleMm) {
-    out.thickness = parseFloat(singleMm[1]);
-    out.units = "mm";
-  }
-
-  // “3 inch square plate” => width/height both 3 inches
-  const squareIn = t.match(/(\d+(\.\d+)?)\s*(?:["in]|inch(?:es)?)\s*(square|plate|bracket)/);
-  if (squareIn) {
-    const val = mmFromInches(parseFloat(squareIn[1]));
-    out.width = val;
-    out.height = val;
-    out.units = "mm";
-  }
-  const squareMm = t.match(/(\d+(\.\d+)?)\s*mm\s*(square|plate|bracket)/);
-  if (squareMm) {
-    const val = parseFloat(squareMm[1]);
-    out.width = val;
-    out.height = val;
-    out.units = "mm";
+  const sqMm = t.match(/(\d+(\.\d+)?)\s*mm\s*(square|plate|bracket)/);
+  if (sqMm) {
+    const v = parseFloat(sqMm[1]);
+    out.width = v; out.height = v; out.units = "mm";
   }
 
-  // Fallback: if a single quoted number appears like 3" or 0.5"
-  const firstIn = t.match(/(\d+(\.\d+)?)\s*(?:["in]|inch(?:es)?)/);
-  if (firstIn && out.width === undefined && out.height === undefined) {
-    const val = mmFromInches(parseFloat(firstIn[1]));
-    out.width = val;
-    out.height = val;
+  // “0.5 inch thick” or “12.7mm thick”
+  const thickIn = t.match(/(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)[^\d]*thick/);
+  if (thickIn) {
+    out.thickness = mmFromInches(parseFloat(thickIn[1]));
+    out.units = "mm";
+  }
+  const thickMm = t.match(/(\d+(\.\d+)?)\s*mm[^\d]*thick/);
+  if (thickMm) {
+    out.thickness = parseFloat(thickMm[1]);
     out.units = "mm";
   }
 
   return out;
 }
 
-/**
- * Parse a hole request (center hole diameter). Supports:
- *  - "add a 1\" hole"
- *  - "add a 25.4mm hole"
- *  - "through hole" (we always do through)
- */
 function parseHole(user: string): Partial<Spec> {
   const out: Partial<Spec> = {};
-  const t = user.toLowerCase();
+  const t = (user || "").toLowerCase();
+  if (!t.includes("hole")) return out;
 
-  if (t.includes("hole")) {
-    // diameter in inches
-    const dIn = t.match(/(\d+(\.\d+)?)\s*(?:["in]|inch(?:es)?)\s*(?:hole|diameter)/);
-    if (dIn) {
-      out.diameter = mmFromInches(parseFloat(dIn[1]));
-      out.units = "mm";
-    }
-    // diameter in mm
-    const dMm = t.match(/(\d+(\.\d+)?)\s*mm\s*(?:hole|diameter)/);
-    if (dMm) {
-      out.diameter = parseFloat(dMm[1]);
-      out.units = "mm";
-    }
+  const dIn = t.match(/(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)\s*(?:hole|diameter)?/);
+  const dMm = t.match(/(\d+(\.\d+)?)\s*mm\s*(?:hole|diameter)?/);
 
-    // default feature hint
-    out.features = Array.from(new Set([...(out.features || []), "hole_center"]));
+  if (dIn) {
+    out.diameter = mmFromInches(parseFloat(dIn[1]));
+    out.units = "mm";
+  } else if (dMm) {
+    out.diameter = parseFloat(dMm[1]);
+    out.units = "mm";
   }
 
+  out.features = Array.from(new Set([...(out.features || []), "hole_center"]));
   return out;
 }
 
-/**
- * Make a basic OpenSCAD plate (width x height x thickness) with optional center through-hole.
- */
 function generatePlateCode(spec: Spec): string {
   const w = spec.width ?? 60;
   const h = spec.height ?? 60;
   const t = spec.thickness ?? spec.depth ?? 6;
   const d = spec.diameter;
 
-  // center the hole at (w/2, h/2). Through hole = height t.
-  const body = `// Parameters (mm)
+  return `// Parameters (mm)
 width = ${w};
 height = ${h};
 thickness = ${t};
@@ -206,8 +197,7 @@ difference() {
   plate();
   ${d ? `translate([width/2, height/2, -1]) cylinder(h = thickness + 2, d = hole_diameter, center=false);` : "// no hole"}
 }
-`;
-  return body.trim() + "\n";
+`.trim() + "\n";
 }
 
 // ---------- Handler ----------
@@ -215,25 +205,27 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const {
-      userPrompt,
+      prompt: templatedPrompt, // your guided prompt
       history = [],
-      currentSpec = {},
-    }: { userPrompt: string; history?: ChatMsg[]; currentSpec?: Spec } = body;
+      spec: currentSpec = {},
+    }: { prompt: string; history?: ChatMsg[]; spec?: Spec } = body;
 
-    const userRequest = extractUserRequest(userPrompt);
-    const hasPriorCode = /###\s*CURRENT_OPENSCAD/i.test(userPrompt);
-    const likelyUpdate = seemsLikeModelUpdate(userRequest) || hasPriorCode;
+    // Strong signal from the templated prompt
+    const hasCurrentCodeHeader = /###\s*CURRENT_OPENSCAD/i.test(templatedPrompt || "");
 
-    console.log("📩 generate input", {
+    const userRequest = extractUserRequest(templatedPrompt || "", history);
+    const heuristicUpdate = looksLikeUpdate(userRequest) || hasCurrentCodeHeader;
+
+    console.log("📥 /generate input", {
       userRequest,
-      hasPriorCode,
-      likelyUpdate,
+      heuristicUpdate,
+      hasCurrentCodeHeader,
       historyLen: history.length,
       currentSpec,
       model: MODEL,
     });
 
-    // 1) INTENT (clean request only)
+    // 1) Intent classification (but we won't allow it to block updates)
     let intent = "nochange";
     try {
       const intentPrompt = `
@@ -252,23 +244,22 @@ Return exactly one token:
       const intentRes = await openai.responses.create({
         model: MODEL,
         input: intentPrompt,
-        // Only this is supported on GPT-5
         max_output_tokens: 32,
       });
       intent = (intentRes.output_text || "").trim().toLowerCase();
     } catch (e: any) {
-      console.warn("⚠️ intent step failed:", e?.message || e);
+      console.warn("⚠️ intent failed:", e?.message || e);
     }
 
-    // Heuristic override
-    if (intent === "nochange" && likelyUpdate) {
-      console.log("🔧 Overriding intent -> update_model (heuristic)");
+    // If our heuristics say “this is an update”, we force update_model
+    if (heuristicUpdate && intent === "nochange") {
+      console.log("🔧 Forcing intent to update_model based on heuristics");
       intent = "update_model";
     }
     console.log("🎯 intent:", intent);
 
-    // 2) QUESTION
-    if (intent === "question") {
+    // 2) If the user actually asked a general question
+    if (!heuristicUpdate && intent === "question") {
       try {
         const answerRes = await openai.responses.create({
           model: MODEL,
@@ -280,17 +271,13 @@ Return exactly one token:
           type: "answer",
           content: text || "Okay.",
         } as AIResponse);
-      } catch (e: any) {
-        // Fallback: generic answer
-        return NextResponse.json({
-          type: "answer",
-          content: "Okay.",
-        } as AIResponse);
+      } catch {
+        return NextResponse.json({ type: "answer", content: "Okay." } as AIResponse);
       }
     }
 
-    // 3) CLARIFICATION
-    if (intent === "clarification") {
+    // 3) Clarification request
+    if (!heuristicUpdate && intent === "clarification") {
       try {
         const askRes = await openai.responses.create({
           model: MODEL,
@@ -319,9 +306,9 @@ Ask only what is missing in 1–3 short bullets.
       }
     }
 
-    // 4) UPDATE MODEL (LLM + deterministic fallback)
-    if (intent === "update_model") {
-      // Try a compact LLM delta update first
+    // 4) Update model path (LLM + deterministic fallback)
+    if (heuristicUpdate || intent === "update_model") {
+      // Try to get a JSON delta from the model (but don't depend on it)
       let delta: Spec = {};
       try {
         const specRes = await openai.responses.create({
@@ -344,10 +331,10 @@ UserRequest: "${userRequest}"
           delta = {};
         }
       } catch (e: any) {
-        console.warn("⚠️ spec LLM failed:", e?.message || e);
+        console.warn("⚠️ spec delta failed:", e?.message || e);
       }
 
-      // Deterministic fallback parse:
+      // Deterministic additions from natural language
       const dims = parseDims(userRequest);
       const hole = parseHole(userRequest);
 
@@ -364,11 +351,11 @@ UserRequest: "${userRequest}"
         Object.keys(dims).length > 0 ||
         Object.keys(hole).length > 0;
 
-      console.log("🧩 merged", merged, "changed?", changed);
+      console.log("🧩 merged spec", merged, "changed?", changed);
 
-      // If STILL nothing changed but we believe it's an update, produce a sane base plate
-      if (!changed && likelyUpdate) {
-        console.log("🪄 Using deterministic base-plate fallback.");
+      // If model gave nothing but we *know* user asked for geometry — generate a sane plate
+      if (!changed) {
+        console.log("🪄 Using deterministic base-plate fallback (nochange avoided).");
         const code = generatePlateCode(merged);
         return NextResponse.json({
           type: "code",
@@ -377,59 +364,52 @@ UserRequest: "${userRequest}"
         } as AIResponse);
       }
 
-      // If there are changes, ask GPT-5 to produce code — with a fallback to deterministic
-      if (changed) {
-        try {
-          const codeRes = await openai.responses.create({
-            model: MODEL,
-            input: `
-Generate OpenSCAD for this spec. Use mm.
+      // Ask model for code (with fallback)
+      try {
+        const codeRes = await openai.responses.create({
+          model: MODEL,
+          input: `
+Generate OpenSCAD for this spec. Use mm. Output ONLY code (no prose).
 
 Spec:
 ${JSON.stringify(merged)}
 
 Rules:
-- Output ONLY OpenSCAD code (no prose).
-- Define variables at top for major dims.
-- If "diameter" exists and "features" includes "hole_center", subtract a through cylinder at plate center.
+- Define variables at the top.
+- If "diameter" exists and "features" includes "hole_center", subtract a through cylinder at the center.
 - Ensure compilable code.
 `,
-            max_output_tokens: 1000,
-          });
-          const code = (codeRes.output_text || "").trim();
-          if (code && /cube|cylinder|difference|union/i.test(code)) {
-            return NextResponse.json({
-              type: "code",
-              spec: merged,
-              content: code,
-            } as AIResponse);
-          }
-          // If code is empty or suspicious, fallback
-          const fallbackCode = generatePlateCode(merged);
+          max_output_tokens: 1000,
+        });
+        const code = (codeRes.output_text || "").trim();
+
+        if (code && /cube|cylinder|difference|union|translate|rotate/i.test(code)) {
           return NextResponse.json({
             type: "code",
             spec: merged,
-            content: fallbackCode,
-          } as AIResponse);
-        } catch {
-          const fallbackCode = generatePlateCode(merged);
-          return NextResponse.json({
-            type: "code",
-            spec: merged,
-            content: fallbackCode,
+            content: code,
           } as AIResponse);
         }
-      }
 
-      // No change
-      return NextResponse.json({
-        type: "nochange",
-        spec: merged,
-        content: "No updates were made.",
-      } as AIResponse);
+        // fallback
+        const fallback = generatePlateCode(merged);
+        return NextResponse.json({
+          type: "code",
+          spec: merged,
+          content: fallback,
+        } as AIResponse);
+      } catch (e: any) {
+        console.warn("⚠️ code gen failed, falling back:", e?.message || e);
+        const fallback = generatePlateCode(merged);
+        return NextResponse.json({
+          type: "code",
+          spec: merged,
+          content: fallback,
+        } as AIResponse);
+      }
     }
 
-    // 5) Default
+    // 5) Default nochange (should be rare now)
     return NextResponse.json({
       type: "nochange",
       spec: { units: "mm", ...(currentSpec || {}) },
@@ -438,10 +418,7 @@ Rules:
   } catch (err: any) {
     console.error("❌ /api/generate error:", err?.response?.data || err?.message || err);
     return NextResponse.json(
-      {
-        error: "Server error",
-        details: err?.response?.data || err?.message || String(err),
-      },
+      { error: "Server error", details: err?.response?.data || err?.message || String(err) },
       { status: 500 }
     );
   }
