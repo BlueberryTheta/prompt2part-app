@@ -10,7 +10,7 @@ export interface Spec {
   depth?: number;     // mm (aka length)
   thickness?: number; // mm
   diameter?: number;  // mm (center hole)
-  shape?: string;     // 'bracket' | 'plate' | 'mug' | ...
+  shape?: string;     // e.g., 'bracket', 'plate', 'cylinder', etc.
   material?: string;
   features?: string[];
   units?: string;     // 'mm'|'inch' (we normalize to mm)
@@ -87,7 +87,7 @@ function looksLikeUpdate(text: string): boolean {
 
   // numbers + units or geometry verbs
   const unitOrDims = /(\d+(\.\d+)?)\s*(mm|cm|in|inch|")|(\d+(\.\d+)?\s*[x×]\s*\d+(\.\d+)?)/i;
-  const geoWords = /\b(add|make|create|generate|remove|change|update|increase|decrease|hole|slot|fillet|chamfer|bracket|plate|cube|cylinder|mug|coffee)\b/;
+  const geoWords = /\b(add|make|create|generate|remove|change|update|increase|decrease|hole|slot|fillet|chamfer|bracket|plate|cube|cylinder)\b/;
 
   const hasDims = unitOrDims.test(t);
   const hasGeo = geoWords.test(t);
@@ -101,7 +101,7 @@ function parseDims(user: string): Partial<Spec> {
   const out: Partial<Spec> = {};
   const t = (user || "").toLowerCase().replace(/\s+/g, " ").trim();
 
-  // 3" x 3" x 0.5"
+  // Match 3" x 3" x 0.5" or similar dimension formats
   const inTriple = t.match(/(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)\s*[x×]\s*(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)\s*[x×]\s*(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)/i);
   if (inTriple) {
     const a = toNum(inTriple[1]);
@@ -116,7 +116,7 @@ function parseDims(user: string): Partial<Spec> {
     }
   }
 
-  // 76.2mm x 76.2mm x 12.7mm
+  // Match dimensions like 76.2mm x 76.2mm x 12.7mm
   const mmTriple = t.match(/(\d+(\.\d+)?)\s*mm\s*[x×]\s*(\d+(\.\d+)?)\s*mm\s*[x×]\s*(\d+(\.\d+)?)\s*mm/i);
   if (mmTriple) {
     const a = toNum(mmTriple[1]);
@@ -131,28 +131,55 @@ function parseDims(user: string): Partial<Spec> {
   return out;
 }
 
-function generateMugCode(spec: Spec): string {
-  // Generating OpenSCAD code for a coffee mug (simplified example)
-  const diameter = spec.diameter ?? 80; // mm
-  const height = spec.height ?? 100; // mm
-  const thickness = spec.thickness ?? 6; // mm
+// Generate OpenSCAD code based on the provided spec (generic)
+function generateGeometryCode(spec: Spec): string {
+  const width = spec.width ?? 60;
+  const height = spec.height ?? 60;
+  const thickness = spec.thickness ?? 6;
+  const diameter = spec.diameter ?? 0; // Optional hole diameter
 
-  return `// Parameters (mm)
-diameter = ${diameter};
+  // Simplified logic for generating different types of geometry
+  if (spec.shape === 'bracket') {
+    return `// Bracket code
+width = ${width};
 height = ${height};
 thickness = ${thickness};
 
-// Mug body
-module mug() {
-  difference() {
-    // Outer cylinder
-    cylinder(h = height, d = diameter);
-    // Inner cylinder (hollow part)
-    cylinder(h = height, d = diameter - 2*thickness);
-  }
+// Bracket model
+module bracket() {
+  cube([width, height, thickness], center=false);
 }
 
-mug();
+bracket();
+`.trim() + "\n";
+  }
+
+  if (spec.shape === 'plate') {
+    return `// Plate code
+width = ${width};
+height = ${height};
+thickness = ${thickness};
+
+// Plate model
+module plate() {
+  cube([width, height, thickness], center=false);
+}
+
+plate();
+`.trim() + "\n";
+  }
+
+  // Default fallback to a plate
+  return `// Default code
+width = ${width};
+height = ${height};
+thickness = ${thickness};
+
+module plate() {
+  cube([width, height, thickness], center=false);
+}
+
+plate();
 `.trim() + "\n";
 }
 
@@ -175,55 +202,22 @@ export async function POST(req: Request) {
     const heuristicUpdate = looksLikeUpdate(userRequest);
     console.log("🔧 Heuristic update check:", heuristicUpdate);
 
-    // Intent Classification (Handle Coffee Mug and Other Objects)
-    let intent = "nochange";
-    try {
-      const intentPrompt = `
-You are the intent classifier for a CAD assistant.
-
-History (compact): ${JSON.stringify(history)}
-CurrentSpec: ${JSON.stringify(currentSpec)}
-Request: "${userRequest}"
-
-Return exactly one token:
-- update_model
-- clarification
-- question
-- nochange
-`;
-      const intentRes = await openai.responses.create({
-        model: MODEL,
-        input: intentPrompt,
-        max_output_tokens: 32,
-      });
-      intent = (intentRes.output_text || "").trim().toLowerCase();
-      console.log("🎯 Intent classified as:", intent);
-    } catch (e: any) {
-      console.warn("⚠️ Intent classification failed:", e?.message || e);
-    }
-
-    // If it's a coffee mug or bracket request, start asking for details
-    if (userRequest.toLowerCase().includes("coffee mug") || userRequest.toLowerCase().includes("bracket")) {
-      if (!currentSpec.diameter || !currentSpec.height) {
-        return NextResponse.json({
-          type: "questions",
-          content: "To make a coffee mug, could you provide the diameter and height?",
-        } as AIResponse);
-      }
-
-      const code = generateMugCode(currentSpec);
+    // Ask for clarification if key dimensions are missing
+    if (!currentSpec.width || !currentSpec.height || !currentSpec.thickness) {
       return NextResponse.json({
-        type: "code",
-        spec: currentSpec,
-        content: code,
+        type: "questions",
+        content: "Could you provide the dimensions (width, height, and thickness) of the object?",
       } as AIResponse);
     }
 
+    // If all required dimensions are available, generate the model
+    const code = generateGeometryCode(currentSpec);
     return NextResponse.json({
-      type: "nochange",
-      spec: { units: "mm", ...(currentSpec || {}) },
-      content: "No updates were made.",
+      type: "code",
+      spec: currentSpec,
+      content: code,
     } as AIResponse);
+    
   } catch (err: any) {
     console.error("❌ /api/generate error:", err?.message || err);
     return NextResponse.json(
