@@ -60,6 +60,7 @@ Rules:
 - Do not ask about material options.
 - Minor defaults ALLOWED (safe assumptions) only when obvious (e.g., through hole means depth = thickness, hole at "center" -> overall midpoint).
 - For any assumption you make, add a concise explanation in "assumptions". 
+- Preserve exisiting features and geometries. Do not make any modifications to exisiting dimensions, features, geometries, etc. unless explicitly instucted to do so.
 - If required info is missing for code, add explicit items to "missing" and ask pointed "questions".
 - NEVER output code here.
 
@@ -204,27 +205,23 @@ export async function POST(req: NextRequest) {
 
     // 4) generate code if spec is good
     const codeMsg: Msg[] = [
-      { role: 'system', content: sysPromptCode() },
-      { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}` },
-    ]
-    const codeRaw = await openai(codeMsg, 1800, 0.15)
+  { role: 'system', content: sysPromptCode() },
+  { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}` },
+]
+const codeRaw = await openai(codeMsg, 1800, 0.15)
 
-    // strip fences if present
-    const code = (codeRaw || '')
-      .replace(/```(?:openscad|scad)?/gi, '```')
-      .replace(/^```/m, '')
-      .replace(/```$/m, '')
-      .trim()
+// Strip unnecessary fences or whitespace
+const code = (codeRaw || '').replace(/```(?:openscad|scad)?/gi, '```').trim()
 
-    if (!looksLikeSCAD(code)) {
-      return NextResponse.json({
-        type: 'questions',
-        assistant_text: 'I still need a bit more info before I can safely generate code.',
-        spec: mergedSpec,
-        questions: ['Please clarify missing geometry details.'],
-        actions: ['merged_spec', 'code_check_failed'],
-      } satisfies ApiResp)
-    }
+if (!looksLikeSCAD(code)) {
+  return NextResponse.json({
+    type: 'questions',
+    assistant_text: 'I still need a bit more info before I can safely generate code.',
+    spec: mergedSpec,
+    questions: ['Please clarify missing geometry details.'],
+    actions: ['merged_spec', 'code_check_failed'],
+  } satisfies ApiResp)
+}
 
     return NextResponse.json({
       type: 'code',
