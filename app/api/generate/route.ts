@@ -195,7 +195,7 @@ module plate() {
 
 difference() {
   plate();
-  ${d ? `translate([width/2, height/2, -1]) cylinder(h = thickness + 2, d = hole_diameter, center=false);` : "// no hole"}
+  ${d ? `translate([width/2, height/2, -1]) cylinder(h = thickness + 2, d = hole_diameter, center=false);` : "// no hole" }
 }
 `.trim() + "\n";
 }
@@ -210,22 +210,16 @@ export async function POST(req: Request) {
       spec: currentSpec = {},
     }: { prompt: string; history?: ChatMsg[]; spec?: Spec } = body;
 
-    // Strong signal from the templated prompt
-    const hasCurrentCodeHeader = /###\s*CURRENT_OPENSCAD/i.test(templatedPrompt || "");
+    console.log("📥 Received request:", body);
 
     const userRequest = extractUserRequest(templatedPrompt || "", history);
-    const heuristicUpdate = looksLikeUpdate(userRequest) || hasCurrentCodeHeader;
+    console.log("📝 Extracted user request:", userRequest);
 
-    console.log("📥 /generate input", {
-      userRequest,
-      heuristicUpdate,
-      hasCurrentCodeHeader,
-      historyLen: history.length,
-      currentSpec,
-      model: MODEL,
-    });
+    // Heuristic check for update
+    const heuristicUpdate = looksLikeUpdate(userRequest);
+    console.log("🔧 Heuristic update check:", heuristicUpdate);
 
-    // 1) Intent classification (but we won't allow it to block updates)
+    // Intent Classification
     let intent = "nochange";
     try {
       const intentPrompt = `
@@ -247,178 +241,23 @@ Return exactly one token:
         max_output_tokens: 32,
       });
       intent = (intentRes.output_text || "").trim().toLowerCase();
+      console.log("🎯 Intent classified as:", intent);
     } catch (e: any) {
-      console.warn("⚠️ intent failed:", e?.message || e);
+      console.warn("⚠️ Intent classification failed:", e?.message || e);
     }
 
-    // If our heuristics say “this is an update”, we force update_model
-    if (heuristicUpdate && intent === "nochange") {
-      console.log("🔧 Forcing intent to update_model based on heuristics");
-      intent = "update_model";
-    }
-    console.log("🎯 intent:", intent);
+    // Continue processing based on intent and request...
+    // Add further logic and logging as needed...
 
-    // 2) If the user actually asked a general question
-    if (!heuristicUpdate && intent === "question") {
-      try {
-        const answerRes = await openai.responses.create({
-          model: MODEL,
-          input: `Answer concisely in the context of OpenSCAD/CAD:\n\nQ: "${userRequest}"`,
-          max_output_tokens: 400,
-        });
-        const text = (answerRes.output_text || "").trim();
-        return NextResponse.json({
-          type: "answer",
-          content: text || "Okay.",
-        } as AIResponse);
-      } catch {
-        return NextResponse.json({ type: "answer", content: "Okay." } as AIResponse);
-      }
-    }
-
-    // 3) Clarification request
-    if (!heuristicUpdate && intent === "clarification") {
-      try {
-        const askRes = await openai.responses.create({
-          model: MODEL,
-          input: `
-We need targeted questions to finalize a model spec.
-
-Spec so far: ${JSON.stringify(currentSpec)}
-User said: "${userRequest}"
-
-Ask only what is missing in 1–3 short bullets.
-`,
-          max_output_tokens: 200,
-        });
-        const text = (askRes.output_text || "").trim();
-        return NextResponse.json({
-          type: "questions",
-          spec: currentSpec,
-          content: text || "Could you clarify the missing dimensions?",
-        } as AIResponse);
-      } catch {
-        return NextResponse.json({
-          type: "questions",
-          spec: currentSpec,
-          content: "Could you clarify the missing dimensions?",
-        } as AIResponse);
-      }
-    }
-
-    // 4) Update model path (LLM + deterministic fallback)
-    if (heuristicUpdate || intent === "update_model") {
-      // Try to get a JSON delta from the model (but don't depend on it)
-      let delta: Spec = {};
-      try {
-        const specRes = await openai.responses.create({
-          model: MODEL,
-          input: `
-Update this JSON spec based ONLY on info clearly provided by the user's request.
-Allowed keys: width,height,depth,thickness,diameter,shape,material,features,units.
-Return STRICT JSON (no prose). Do NOT guess.
-
-CurrentSpec: ${JSON.stringify(currentSpec)}
-UserRequest: "${userRequest}"
-`,
-          max_output_tokens: 240,
-        });
-        const raw = (specRes.output_text || "").trim();
-        try {
-          delta = JSON.parse(raw);
-        } catch {
-          console.warn("⚠️ Could not parse LLM spec JSON. Raw:", raw);
-          delta = {};
-        }
-      } catch (e: any) {
-        console.warn("⚠️ spec delta failed:", e?.message || e);
-      }
-
-      // Deterministic additions from natural language
-      const dims = parseDims(userRequest);
-      const hole = parseHole(userRequest);
-
-      const merged: Spec = {
-        units: "mm",
-        ...(currentSpec || {}),
-        ...(delta || {}),
-        ...dims,
-        ...hole,
-      };
-
-      const changed =
-        Object.keys(delta).length > 0 ||
-        Object.keys(dims).length > 0 ||
-        Object.keys(hole).length > 0;
-
-      console.log("🧩 merged spec", merged, "changed?", changed);
-
-      // If model gave nothing but we *know* user asked for geometry — generate a sane plate
-      if (!changed) {
-        console.log("🪄 Using deterministic base-plate fallback (nochange avoided).");
-        const code = generatePlateCode(merged);
-        return NextResponse.json({
-          type: "code",
-          spec: merged,
-          content: code,
-        } as AIResponse);
-      }
-
-      // Ask model for code (with fallback)
-      try {
-        const codeRes = await openai.responses.create({
-          model: MODEL,
-          input: `
-Generate OpenSCAD for this spec. Use mm. Output ONLY code (no prose).
-
-Spec:
-${JSON.stringify(merged)}
-
-Rules:
-- Define variables at the top.
-- If "diameter" exists and "features" includes "hole_center", subtract a through cylinder at the center.
-- Ensure compilable code.
-`,
-          max_output_tokens: 1000,
-        });
-        const code = (codeRes.output_text || "").trim();
-
-        if (code && /cube|cylinder|difference|union|translate|rotate/i.test(code)) {
-          return NextResponse.json({
-            type: "code",
-            spec: merged,
-            content: code,
-          } as AIResponse);
-        }
-
-        // fallback
-        const fallback = generatePlateCode(merged);
-        return NextResponse.json({
-          type: "code",
-          spec: merged,
-          content: fallback,
-        } as AIResponse);
-      } catch (e: any) {
-        console.warn("⚠️ code gen failed, falling back:", e?.message || e);
-        const fallback = generatePlateCode(merged);
-        return NextResponse.json({
-          type: "code",
-          spec: merged,
-          content: fallback,
-        } as AIResponse);
-      }
-    }
-
-    // 5) Default nochange (should be rare now)
     return NextResponse.json({
       type: "nochange",
       spec: { units: "mm", ...(currentSpec || {}) },
       content: "No updates were made.",
     } as AIResponse);
   } catch (err: any) {
-    console.error("❌ /api/generate error:", err?.response?.data || err?.message || err);
+    console.error("❌ /api/generate error:", err?.message || err);
     return NextResponse.json(
-      { error: "Server error", details: err?.response?.data || err?.message || String(err) },
+      { error: "Server error", details: err?.message || String(err) },
       { status: 500 }
     );
   }
