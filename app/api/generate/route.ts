@@ -10,7 +10,7 @@ export interface Spec {
   depth?: number;     // mm (aka length)
   thickness?: number; // mm
   diameter?: number;  // mm (center hole)
-  shape?: string;     // 'bracket' | 'plate' | ...
+  shape?: string;     // 'bracket' | 'plate' | 'mug' | ...
   material?: string;
   features?: string[];
   units?: string;     // 'mm'|'inch' (we normalize to mm)
@@ -128,74 +128,31 @@ function parseDims(user: string): Partial<Spec> {
     }
   }
 
-  // “square plate 3 in”
-  const sqIn = t.match(/(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)\s*(square|plate|bracket)/);
-  if (sqIn) {
-    const v = mmFromInches(parseFloat(sqIn[1]));
-    out.width = v; out.height = v; out.units = "mm";
-  }
-  const sqMm = t.match(/(\d+(\.\d+)?)\s*mm\s*(square|plate|bracket)/);
-  if (sqMm) {
-    const v = parseFloat(sqMm[1]);
-    out.width = v; out.height = v; out.units = "mm";
-  }
-
-  // “0.5 inch thick” or “12.7mm thick”
-  const thickIn = t.match(/(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)[^\d]*thick/);
-  if (thickIn) {
-    out.thickness = mmFromInches(parseFloat(thickIn[1]));
-    out.units = "mm";
-  }
-  const thickMm = t.match(/(\d+(\.\d+)?)\s*mm[^\d]*thick/);
-  if (thickMm) {
-    out.thickness = parseFloat(thickMm[1]);
-    out.units = "mm";
-  }
-
   return out;
 }
 
-function parseHole(user: string): Partial<Spec> {
-  const out: Partial<Spec> = {};
-  const t = (user || "").toLowerCase();
-  if (!t.includes("hole")) return out;
-
-  const dIn = t.match(/(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)\s*(?:hole|diameter)?/);
-  const dMm = t.match(/(\d+(\.\d+)?)\s*mm\s*(?:hole|diameter)?/);
-
-  if (dIn) {
-    out.diameter = mmFromInches(parseFloat(dIn[1]));
-    out.units = "mm";
-  } else if (dMm) {
-    out.diameter = parseFloat(dMm[1]);
-    out.units = "mm";
-  }
-
-  out.features = Array.from(new Set([...(out.features || []), "hole_center"]));
-  return out;
-}
-
-function generatePlateCode(spec: Spec): string {
-  const w = spec.width ?? 60;
-  const h = spec.height ?? 60;
-  const t = spec.thickness ?? spec.depth ?? 6;
-  const d = spec.diameter;
+function generateMugCode(spec: Spec): string {
+  // Generating OpenSCAD code for a coffee mug (simplified example)
+  const diameter = spec.diameter ?? 80; // mm
+  const height = spec.height ?? 100; // mm
+  const thickness = spec.thickness ?? 6; // mm
 
   return `// Parameters (mm)
-width = ${w};
-height = ${h};
-thickness = ${t};
-${d ? `hole_diameter = ${d};` : ""}
+diameter = ${diameter};
+height = ${height};
+thickness = ${thickness};
 
-// Main body
-module plate() {
-  cube([width, height, thickness], center=false);
+// Mug body
+module mug() {
+  difference() {
+    // Outer cylinder
+    cylinder(h = height, d = diameter);
+    // Inner cylinder (hollow part)
+    cylinder(h = height, d = diameter - 2*thickness);
+  }
 }
 
-difference() {
-  plate();
-  ${d ? `translate([width/2, height/2, -1]) cylinder(h = thickness + 2, d = hole_diameter, center=false);` : "// no hole" }
-}
+mug();
 `.trim() + "\n";
 }
 
@@ -218,7 +175,7 @@ export async function POST(req: Request) {
     const heuristicUpdate = looksLikeUpdate(userRequest);
     console.log("🔧 Heuristic update check:", heuristicUpdate);
 
-    // Intent Classification
+    // Intent Classification (Handle Coffee Mug and Other Objects)
     let intent = "nochange";
     try {
       const intentPrompt = `
@@ -245,11 +202,16 @@ Return exactly one token:
       console.warn("⚠️ Intent classification failed:", e?.message || e);
     }
 
-    // Process based on intent...
-    if (intent === "update_model" || heuristicUpdate) {
-      // Handle model update (generate OpenSCAD code)
-      console.log("🔧 Generating model based on user request:", userRequest);
-      const code = generatePlateCode(currentSpec);
+    // If it's a coffee mug or bracket request, start asking for details
+    if (userRequest.toLowerCase().includes("coffee mug") || userRequest.toLowerCase().includes("bracket")) {
+      if (!currentSpec.diameter || !currentSpec.height) {
+        return NextResponse.json({
+          type: "questions",
+          content: "To make a coffee mug, could you provide the diameter and height?",
+        } as AIResponse);
+      }
+
+      const code = generateMugCode(currentSpec);
       return NextResponse.json({
         type: "code",
         spec: currentSpec,
