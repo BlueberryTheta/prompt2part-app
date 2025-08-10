@@ -77,14 +77,18 @@ function sysPromptCode() {
   return `
 You are an OpenSCAD generator. Produce only valid OpenSCAD.
 
-Rules:
-- Use millimeters if units == "mm".
-- Start with clear named parameters.
-- Never make any changes that are no explicitly asked for. Preserve all exisiting features unless expicitly instructed otherwise. 
-- Keep in mind these models are intended to be 3D printed and should always be in one peice and connected unless explicited stated otherwise.
-- Use difference() for holes/slots; respect positions, diameters, thickness, etc.
-- No prose. No Markdown. RETURN ONLY CODE.`
-    .trim()
+Hard rules:
+- Output ONLY code (no prose/markdown).
+- Do NOT set $fn; caller controls tessellation.
+- Result must be a SINGLE, closed, 3D manifold suitable for FDM printing.
+- New features must be Boolean-combined with the main body in ONE top-level CSG (e.g., union()/difference()).
+- When attaching features (e.g., handles, bosses), push them into the host by >= 0.3 mm and union() so they fuse; never leave touching/coincident surfaces.
+- Do not use 2D primitives (square/circle/polygon) without linear_extrude() or rotate_extrude().
+- For holes/slots, subtract with difference() and ensure through-cuts where requested.
+- Preserve existing spec values; do not change dimensions unless explicitly requested.
+
+Return ONLY compilable OpenSCAD code.
+`.trim()
 }
 
 async function openai(messages: Msg[], max_tokens = 1200, temperature = 0.2) {
