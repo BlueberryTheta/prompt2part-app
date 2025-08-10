@@ -85,6 +85,7 @@ export default function DashboardPage() {
       '',
       '### RULES',
       '- Preserve existing features unless explicitly asked to remove them.',
+      '- Do not add any items to the model unless explicitly asked to.',
       '- If the model has holes, DO NOT remove them unless asked.',
       '- When adding fillets/rounds, subtract holes AFTER filleting so they remain.',
       '- Keep units consistent with the existing code.',
