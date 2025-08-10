@@ -1,176 +1,241 @@
-import { NextResponse } from "next/server";
-import OpenAI from "openai";
+// app/api/generate/route.ts
+import { NextRequest, NextResponse } from 'next/server'
 
-export const dynamic = "force-dynamic"; // make sure it's not cached during testing
+const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
+const OPENAI_MODEL = 'gpt-4o' // or gpt-4o-mini
 
-// ---------- Types ----------
-export interface Spec {
-  width?: number;     // mm
-  height?: number;    // mm
-  depth?: number;     // mm (aka length)
-  thickness?: number; // mm
-  diameter?: number;  // mm (center hole)
-  shape?: string;     // e.g., 'bracket', 'plate', 'cylinder', etc.
-  material?: string;
-  features?: string[];
-  units?: string;     // 'mm'|'inch' (we normalize to mm)
+type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
+
+// What we persist across turns
+export type Spec = {
+  units?: 'mm' | 'inch'
+  part_type?: string
+  overall?: { x?: number; y?: number; z?: number } // mm
+  features?: Array<
+    | { type: 'hole'; diameter?: number; position?: { x: number; y: number }; count?: number; through?: boolean; countersink?: boolean }
+    | { type: 'slot'; width?: number; length?: number; center?: { x: number; y: number }; angle?: number }
+    | { type: 'fillet'; radius?: number; edges?: 'all' | 'none' | 'some' }
+    | { type: 'chamfer'; size?: number; edges?: 'all' | 'none' | 'some' }
+  >
+  tolerances?: { general?: number; hole_clearance?: number }
+  notes?: string
 }
 
-interface ChatMsg {
-  role: "user" | "assistant" | "system";
-  content: string;
+type ApiReq = {
+  prompt: string
+  history?: Msg[]
+  spec?: Spec // last known spec from client
 }
 
-interface AIResponse {
-  type: "code" | "questions" | "answer" | "nochange";
-  spec?: Spec;
-  content: string; // code or text
+type ApiResp =
+  | {
+      type: 'answer' | 'questions' | 'code'
+      assistant_text: string // always provide something readable
+      spec: Spec // always echo back merged spec
+      assumptions?: string[] // when assistant applied small defaults
+      questions?: string[] // when more info is needed
+      code?: string // when we produced OpenSCAD
+      actions?: string[] // log what we did (merge, defaults, codegen)
+    }
+  | { error: string }
+
+function sysPromptClassifier() {
+  return `
+You are an intent classifier for a CAD assistant.
+Decide if the user's message is:
+- "question" (they're asking about design choices or best practices)
+- "change" (they want to modify or create the model)
+- "ambiguous" (not enough info to tell)
+
+Return STRICT JSON: {"intent":"question"|"change"|"ambiguous","reason":"<short>"}`
+    .trim()
 }
 
-// ---------- Model ----------
-const MODEL = process.env.OPENAI_MODEL || "gpt-5";
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+function sysPromptSpecMerge() {
+  return `
+You are a CAD spec editor. Merge the new user request into the existing SPEC.
 
-// ---------- Helper to extract user request ----------
-function extractUserRequest(raw: string, history: ChatMsg[]): string {
-  if (!raw) {
-    const lastUser = [...history].reverse().find(m => m.role === "user");
-    return (lastUser?.content || "").trim();
-  }
+Rules:
+- Keep units consistent. Default to "mm" if not provided.
+- Minor defaults ALLOWED (safe assumptions) only when obvious (e.g., through hole means depth = thickness, hole at "center" -> overall midpoint).
+- For any assumption you make, add a concise explanation in "assumptions".
+- If required info is missing for code, add explicit items to "missing" and ask pointed "questions".
+- NEVER output code here.
 
-  return raw.replace(/\r\n/g, "\n").trim();
+Output STRICT JSON:
+{
+  "spec": <merged spec>,
+  "assumptions": string[],
+  "missing": string[],
+  "questions": string[]
+}`
+    .trim()
 }
 
-// ---------- Handler ----------
-export async function POST(req: Request) {
+function sysPromptCode() {
+  return `
+You are an OpenSCAD generator. Produce only valid OpenSCAD.
+
+Rules:
+- Use millimeters if units == "mm".
+- Start with clear named parameters.
+- Use difference() for holes/slots; respect positions, diameters, thickness, etc.
+- No prose. No Markdown. RETURN ONLY CODE.`
+    .trim()
+}
+
+async function openai(messages: Msg[], max_tokens = 1200, temperature = 0.2) {
+  const res = await fetch(OPENAI_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({ model: OPENAI_MODEL, messages, max_tokens, temperature }),
+  })
+  const json = await res.json()
+  return json?.choices?.[0]?.message?.content ?? ''
+}
+
+function safeParseJson(jsonish: string) {
+  // Extract largest JSON block if model added fluff
+  const match = jsonish.match(/\{[\s\S]*\}/)
+  if (!match) throw new Error('No JSON block found')
+  return JSON.parse(match[0])
+}
+
+function looksLikeSCAD(code: string) {
+  return /cube|cylinder|translate|difference|union|rotate|linear_extrude/i.test(code)
+}
+
+export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { prompt: templatedPrompt, history = [], spec: currentSpec = {} }: { prompt: string; history?: ChatMsg[]; spec?: Spec } = body;
+    const { prompt, history = [], spec: incomingSpec = {} } = (await req.json()) as ApiReq
 
-    console.log("📥 Received request:", body);
-
-    const userRequest = extractUserRequest(templatedPrompt || "", history);
-    console.log("📝 Extracted user request:", userRequest);
-
-    // 1) Use OpenAI to classify the intent and determine the action
-    const intentPrompt = `
-      You are a CAD assistant. Based on the following history, decide if the user is:
-      - asking for a geometry update (e.g., "change this bracket to be 4mm thick")
-      - asking for clarification (e.g., missing dimensions)
-      - asking a question (e.g., "What is the material for this model?")
-      Return one of the following tokens:
-      - update_model
-      - clarification
-      - question
-    `;
-    
-    const intentRes = await openai.responses.create({
-      model: MODEL,
-      input: intentPrompt + `\n\nUser request: "${userRequest}"\n\nHistory: ${JSON.stringify(history)}`,
-      max_output_tokens: 32,
-    });
-
-    const intent = (intentRes.output_text || "").trim().toLowerCase();
-
-    console.log("🎯 Intent classified as:", intent);
-
-    // 2) If the intent is clarification, ask the user for more details (e.g., dimensions)
-    if (intent === "clarification") {
-      return NextResponse.json({
-        type: "questions",
-        content: "Could you please provide the missing dimensions (width, height, thickness, etc.) for this object?",
-      } as AIResponse);
+    // 1) classify intent
+    const classifyMsg: Msg[] = [
+      { role: 'system', content: sysPromptClassifier() },
+      ...history,
+      { role: 'user', content: prompt },
+    ]
+    const clsRaw = await openai(classifyMsg, 200, 0.1)
+    let intent: 'question' | 'change' | 'ambiguous' = 'ambiguous'
+    try {
+      const parsed = safeParseJson(clsRaw)
+      intent = parsed.intent
+    } catch (e) {
+      // if classifier failed, consider ambiguous to be safe
+      intent = 'ambiguous'
     }
 
-    // 3) If the intent is a general question, we answer it
-    if (intent === "question") {
+    // 2) handle pure question early (no spec change)
+    if (intent === 'question') {
+      // answer conversationally but succinctly
+      const qaMsg: Msg[] = [
+        {
+          role: 'system',
+          content:
+            'You are a helpful CAD assistant. Answer the user’s question briefly and concretely for 3D printable parts. No code, no JSON.',
+        },
+        ...history,
+        { role: 'user', content: prompt },
+      ]
+      const answer = await openai(qaMsg, 500, 0.3)
       return NextResponse.json({
-        type: "answer",
-        content: "I'm here to help with your CAD model. Please specify your requirements!",
-      } as AIResponse);
+        type: 'answer',
+        assistant_text: answer?.trim() || 'Here are a few suggestions.',
+        spec: incomingSpec,
+        actions: ['answered_question'],
+      } satisfies ApiResp)
     }
 
-    // 4) If the user is requesting an update to the model, ask for necessary dimensions if not available
-    if (intent === "update_model") {
-      // Ask for missing dimensions if necessary
-      if (!currentSpec.width || !currentSpec.height || !currentSpec.thickness) {
-        return NextResponse.json({
-          type: "questions",
-          content: "I need the dimensions (width, height, thickness, etc.) to proceed. Can you please provide them?",
-        } as AIResponse);
-      }
+    // 3) merge/update spec (for "change" or "ambiguous")
+    const mergeMsg: Msg[] = [
+      { role: 'system', content: sysPromptSpecMerge() },
+      {
+        role: 'user',
+        content:
+          `EXISTING_SPEC:\n` +
+          JSON.stringify(incomingSpec || {}, null, 2) +
+          `\n\nUSER_REQUEST:\n` +
+          prompt,
+      },
+    ]
+    const mergedRaw = await openai(mergeMsg, 900, 0.1)
 
-      // Proceed to generate the OpenSCAD code once dimensions are available
-      const code = generateGeometryCode(currentSpec);
+    let mergedSpec: Spec = incomingSpec
+    let assumptions: string[] = []
+    let missing: string[] = []
+    let questions: string[] = []
+    try {
+      const parsed = safeParseJson(mergedRaw)
+      mergedSpec = parsed.spec || incomingSpec
+      assumptions = parsed.assumptions || []
+      missing = parsed.missing || []
+      questions = parsed.questions || []
+    } catch (e: any) {
+      console.error('Spec merge parse error:', e?.message, mergedRaw)
       return NextResponse.json({
-        type: "code",
-        spec: currentSpec,
-        content: code,
-      } as AIResponse);
+        error: 'Spec merge failed: invalid JSON',
+      } as ApiResp, { status: 500 })
     }
 
-    // If intent is not recognized, ask the user for clarification
+    // If still missing info or ambiguous, ask questions (no code)
+    if (intent === 'ambiguous' || (missing.length > 0 || questions.length > 0)) {
+      const msg = [
+        assumptions.length ? `Assumptions applied:\n- ${assumptions.join('\n- ')}` : null,
+        missing.length ? `I still need:\n- ${missing.join('\n- ')}` : null,
+        questions.length ? `Questions:\n- ${questions.join('\n- ')}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+
+      return NextResponse.json({
+        type: 'questions',
+        assistant_text: msg || 'I need a bit more info.',
+        spec: mergedSpec,
+        assumptions,
+        questions,
+        actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults'],
+      } satisfies ApiResp)
+    }
+
+    // 4) generate code if spec is good
+    const codeMsg: Msg[] = [
+      { role: 'system', content: sysPromptCode() },
+      { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}` },
+    ]
+    const codeRaw = await openai(codeMsg, 1800, 0.15)
+
+    // strip fences if present
+    const code = (codeRaw || '')
+      .replace(/```(?:openscad|scad)?/gi, '```')
+      .replace(/^```/m, '')
+      .replace(/```$/m, '')
+      .trim()
+
+    if (!looksLikeSCAD(code)) {
+      return NextResponse.json({
+        type: 'questions',
+        assistant_text: 'I still need a bit more info before I can safely generate code.',
+        spec: mergedSpec,
+        questions: ['Please clarify missing geometry details.'],
+        actions: ['merged_spec', 'code_check_failed'],
+      } satisfies ApiResp)
+    }
+
     return NextResponse.json({
-      type: "questions",
-      content: "Can you provide more details or clarification about your request?",
-    } as AIResponse);
-
+      type: 'code',
+      assistant_text: assumptions.length
+        ? `Updated the model. I applied:\n- ${assumptions.join('\n- ')}`
+        : 'Updated the model.',
+      spec: mergedSpec,
+      assumptions,
+      code,
+      actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults', 'generated_code'],
+    } satisfies ApiResp)
   } catch (err: any) {
-    console.error("❌ /api/generate error:", err?.message || err);
-    return NextResponse.json(
-      { error: "Server error", details: err?.message || String(err) },
-      { status: 500 }
-    );
+    console.error('🛑 /api/generate fatal error:', err?.message || err)
+    return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 })
   }
-}
-
-// ---------- Generate OpenSCAD code based on the given spec ----------
-function generateGeometryCode(spec: Spec): string {
-  const width = spec.width ?? 60;
-  const height = spec.height ?? 60;
-  const thickness = spec.thickness ?? 6;
-
-  // Handle different shapes based on the spec
-  if (spec.shape === 'bracket') {
-    return `// Bracket code
-width = ${width};
-height = ${height};
-thickness = ${thickness};
-
-// Bracket model
-module bracket() {
-  cube([width, height, thickness], center=false);
-}
-
-bracket();
-`.trim() + "\n";
-  }
-
-  if (spec.shape === 'plate') {
-    return `// Plate code
-width = ${width};
-height = ${height};
-thickness = ${thickness};
-
-// Plate model
-module plate() {
-  cube([width, height, thickness], center=false);
-}
-
-plate();
-`.trim() + "\n";
-  }
-
-  // Default fallback to a plate
-  return `// Default code
-width = ${width};
-height = ${height};
-thickness = ${thickness};
-
-module plate() {
-  cube([width, height, thickness], center=false);
-}
-
-plate();
-`.trim() + "\n";
 }
