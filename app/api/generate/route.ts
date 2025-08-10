@@ -80,6 +80,7 @@ Rules:
 - Use millimeters if units == "mm".
 - Start with clear named parameters.
 - Keep in mind these models are intended to be 3D printed and should always be in one peice and connected unless explicited stated otherwise.
+- Make any cuts or holes last to ensure that other features do no protude into areas that should be open.
 - Use difference() for holes/slots; respect positions, diameters, thickness, etc.
 - No prose. No Markdown. RETURN ONLY CODE.`
     .trim()
