@@ -87,7 +87,7 @@ function looksLikeUpdate(text: string): boolean {
 
   // numbers + units or geometry verbs
   const unitOrDims = /(\d+(\.\d+)?)\s*(mm|cm|in|inch|")|(\d+(\.\d+)?\s*[x×]\s*\d+(\.\d+)?)/i;
-  const geoWords = /\b(add|make|create|generate|remove|change|update|increase|decrease|hole|slot|fillet|chamfer|bracket|plate|cube|cylinder|difference|union|mug|coffee)\b/;
+  const geoWords = /\b(add|make|create|generate|remove|change|update|increase|decrease|hole|slot|fillet|chamfer|bracket|plate|cube|cylinder|mug|coffee)\b/;
 
   const hasDims = unitOrDims.test(t);
   const hasGeo = geoWords.test(t);
@@ -246,9 +246,8 @@ Return exactly one token:
     }
 
     // Process based on intent...
-    if (intent === "update_model") {
+    if (intent === "update_model" || heuristicUpdate) {
       // Handle model update (generate OpenSCAD code)
-      // (This is a simplified example; adjust as needed)
       console.log("🔧 Generating model based on user request:", userRequest);
       const code = generatePlateCode(currentSpec);
       return NextResponse.json({
