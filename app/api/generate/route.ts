@@ -92,7 +92,20 @@ Rules:
 - 2D ops (offset/square/circle/polygon) MUST be inside linear_extrude() or rotate_extrude(). Avoid offset-based shells on 2D unless extruded.
 - Do NOT include Markdown or triple backticks. Return raw OpenSCAD only.
 - Do NOT set $fn; the caller controls tessellation.
-- No prose. No Markdown. RETURN ONLY CODE.`
+- No prose. No Markdown. RETURN ONLY CODE.
+
+- For hollow shells (outer wall + inner cavity), attachments must reference the OUTER surface, not the inner wall. Use:
+  outer_r = outer_diameter/2;
+  inner_r = outer_r - wall_thickness;
+  attach_overlap >= 0.3;
+  x_attach = outer_r - attach_overlap; // overlap into the outer wall only
+
+- Never allow an attachment to penetrate the inner cavity unless explicitly requested. Enforce:
+  (attach_overlap + local_half_thickness) <= (wall_thickness - 0.2);
+  If this cannot be satisfied, reduce the local feature thickness or ask for clarification instead of breaching the cavity.
+
+
+`
     .trim()
 }
 
@@ -229,6 +242,29 @@ if (m) code = m[1].trim();
 
 // Remove any $fn the model set; the client controls tessellation
 code = code.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '');
+
+function breachesInnerWallPattern(code: string) {
+  // Common bad placement: using inner wall as origin (outer/2 - wall_thickness - overlap)
+  const innerRef = /\bmug_diameter\s*\/\s*2\s*-\s*wall_thickness\s*-\s*[\w\.]+\b/i.test(code);
+
+  // Also catch any explicit "inner_r" placement without clearance math
+  const naiveInnerR = /\binner_r\b.*translate\(\s*\[\s*inner_r\b/i.test(code);
+
+  return innerRef || naiveInnerR ? 'inner_wall_reference' : null;
+}
+
+const innerBreach = breachesInnerWallPattern(code);
+if (innerBreach) {
+  return NextResponse.json({
+    type: 'questions',
+    assistant_text:
+      'Your attachment was placed relative to the inner wall, which would breach the cavity. ' +
+      'Please specify an attach overlap into the **outer** wall (e.g., 0.5 mm), or say "use default overlap".',
+    spec: mergedSpec,
+    questions: ['Attach overlap into the OUTER wall (mm)? (Typical: 0.3–0.8)'],
+    actions: ['merged_spec', 'policy_guard_triggered', innerBreach],
+  } satisfies ApiResp)
+}
 
 function violatesAttachPolicy(code: string) {
   // Detect common "float-away" pattern: mug_diameter/2 + something
