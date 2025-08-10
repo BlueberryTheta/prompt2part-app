@@ -57,8 +57,9 @@ You are a CAD spec editor. Merge the new user request into the existing SPEC.
 
 Rules:
 - Keep units consistent. Default to "mm" if not provided.
+- Do not ask about material options.
 - Minor defaults ALLOWED (safe assumptions) only when obvious (e.g., through hole means depth = thickness, hole at "center" -> overall midpoint).
-- For any assumption you make, add a concise explanation in "assumptions".
+- For any assumption you make, add a concise explanation in "assumptions". 
 - If required info is missing for code, add explicit items to "missing" and ask pointed "questions".
 - NEVER output code here.
 
@@ -66,8 +67,7 @@ Output STRICT JSON:
 {
   "spec": <merged spec>,
   "assumptions": string[],
-  "missing": string[],
-  "questions": string[]
+   "questions": string[]
 }`
     .trim()
 }
@@ -79,6 +79,7 @@ You are an OpenSCAD generator. Produce only valid OpenSCAD.
 Rules:
 - Use millimeters if units == "mm".
 - Start with clear named parameters.
+- Keep in mind these models are intended to be 3D printed and should always be in one peice and connected unless explicited stated otherwise.
 - Use difference() for holes/slots; respect positions, diameters, thickness, etc.
 - No prose. No Markdown. RETURN ONLY CODE.`
     .trim()
