@@ -257,7 +257,7 @@ const handleSubmit = async () => {
     // Always show assistant_text
     const assistantText = data?.assistant_text || 'Okay.'
     setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
-
+    takeSnapshot();  // After updating history
     // Always update spec if provided
     if (data?.spec) setSpec(data.spec)
     setAssumptions(data?.assumptions || [])
@@ -280,6 +280,7 @@ const handleSubmit = async () => {
   } catch (err) {
     console.error('Client submit error:', err)
     setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
+    takeSnapshot();  // After updating history
   } finally {
     setLoading(false)
   }
