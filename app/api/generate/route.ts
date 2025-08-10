@@ -58,9 +58,9 @@ You are a CAD spec editor. Merge the new user request into the existing SPEC.
 Rules:
 - Keep units consistent. Default to "mm" if not provided.
 - Do not ask about material options.
-- Minor defaults ALLOWED (safe assumptions) only when obvious (e.g., through hole means depth = thickness, hole at "center" -> overall midpoint).
-- For any assumption you make, add a concise explanation in "assumptions". 
-- Preserve exisiting features and geometries. Do not make any modifications to exisiting dimensions, features, geometries, etc. unless explicitly instucted to do so.
+- Do NOT change or infer existing global dimensions, features, or geometry unless the user explicitly requests a change.
+- Defaults may be added ONLY for NEW feature-local fields that are strictly required (e.g., a handle's width/length/thickness) and must be listed in "assumptions".
+- Never infer capacity/volume or compute new global dimensions from formulas unless the SPEC already includes an explicit target for that quantity (e.g., target_volume_ml).
 - If required info is missing for code, add explicit items to "missing" and ask pointed "questions".
 - NEVER output code here.
 
@@ -68,9 +68,8 @@ Output STRICT JSON:
 {
   "spec": <merged spec>,
   "assumptions": string[],
-   "questions": string[]
-}`
-    .trim()
+  "questions": string[]
+}`.trim()
 }
 
 function sysPromptCode() {
@@ -87,6 +86,9 @@ Rules:
 - For holes/slots, subtract with difference() and ensure through-cuts where requested.
 - Preserve existing spec values; do not change dimensions unless explicitly requested.
 - Use difference() for holes/slots; respect positions, diameters, thickness, etc.
+- Do NOT invent or recompute global dimensions from formulas unless the SPEC explicitly provides that target (e.g., target_volume_ml). If absent, use SPEC as-is.
+- When hollowing a feature (e.g., handle loop), subtract a STRICTLY smaller inner solid (shrink in all axes by the shell), never larger.
+- 2D ops (offset/square/circle/polygon) MUST be inside linear_extrude() or rotate_extrude(). Avoid offset-based shells on 2D unless extruded.
 - Do NOT include Markdown or triple backticks. Return raw OpenSCAD only.
 - Do NOT set $fn; the caller controls tessellation.
 - No prose. No Markdown. RETURN ONLY CODE.`
