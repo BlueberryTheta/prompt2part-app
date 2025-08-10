@@ -58,12 +58,10 @@ export async function POST(req: Request) {
       - asking for a geometry update (e.g., "change this bracket to be 4mm thick")
       - asking for clarification (e.g., missing dimensions)
       - asking a question (e.g., "What is the material for this model?")
-      - no change requested
       Return one of the following tokens:
       - update_model
       - clarification
       - question
-      - nochange
     `;
     
     const intentRes = await openai.responses.create({
@@ -93,10 +91,9 @@ export async function POST(req: Request) {
     }
 
     // 4) If the user is requesting an update to the model, ask for necessary dimensions if not available
-    if (intent === "update_model" || intent === "nochange") {
-      // Generate OpenSCAD code based on available spec
+    if (intent === "update_model") {
+      // Ask for missing dimensions if necessary
       if (!currentSpec.width || !currentSpec.height || !currentSpec.thickness) {
-        // Ask for missing dimensions if necessary
         return NextResponse.json({
           type: "questions",
           content: "I need the dimensions (width, height, thickness, etc.) to proceed. Can you please provide them?",
@@ -112,11 +109,12 @@ export async function POST(req: Request) {
       } as AIResponse);
     }
 
+    // If intent is not recognized, ask the user for clarification
     return NextResponse.json({
-      type: "nochange",
-      spec: { units: "mm", ...(currentSpec || {}) },
-      content: "No updates were made.",
+      type: "questions",
+      content: "Can you provide more details or clarification about your request?",
     } as AIResponse);
+
   } catch (err: any) {
     console.error("❌ /api/generate error:", err?.message || err);
     return NextResponse.json(
@@ -132,17 +130,47 @@ function generateGeometryCode(spec: Spec): string {
   const height = spec.height ?? 60;
   const thickness = spec.thickness ?? 6;
 
-  // Simple OpenSCAD generation for a generic object
-  return `// Parameters (mm)
+  // Handle different shapes based on the spec
+  if (spec.shape === 'bracket') {
+    return `// Bracket code
 width = ${width};
 height = ${height};
 thickness = ${thickness};
 
-// Object model
-module object() {
+// Bracket model
+module bracket() {
   cube([width, height, thickness], center=false);
 }
 
-object();
+bracket();
+`.trim() + "\n";
+  }
+
+  if (spec.shape === 'plate') {
+    return `// Plate code
+width = ${width};
+height = ${height};
+thickness = ${thickness};
+
+// Plate model
+module plate() {
+  cube([width, height, thickness], center=false);
+}
+
+plate();
+`.trim() + "\n";
+  }
+
+  // Default fallback to a plate
+  return `// Default code
+width = ${width};
+height = ${height};
+thickness = ${thickness};
+
+module plate() {
+  cube([width, height, thickness], center=false);
+}
+
+plate();
 `.trim() + "\n";
 }
