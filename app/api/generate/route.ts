@@ -88,6 +88,7 @@ Rules:
 - Use difference() for holes/slots; respect positions, diameters, thickness, etc.
 - Do NOT invent or recompute global dimensions from formulas unless the SPEC explicitly provides that target (e.g., target_volume_ml). If absent, use SPEC as-is.
 - When hollowing a feature (e.g., handle loop), subtract a STRICTLY smaller inner solid (shrink in all axes by the shell), never larger.
+- Never place attachments using a positive "offset" away from the host (e.g., mug_diameter/2 + offset). Instead, compute the attach position so the part penetrates the host by an overlap: for a cylinder use x_attach = (outer_diameter/2 - wall_thickness) - attach_overlap, where attach_overlap >= 0.3 mm.
 - 2D ops (offset/square/circle/polygon) MUST be inside linear_extrude() or rotate_extrude(). Avoid offset-based shells on 2D unless extruded.
 - Do NOT include Markdown or triple backticks. Return raw OpenSCAD only.
 - Do NOT set $fn; the caller controls tessellation.
@@ -216,7 +217,7 @@ export async function POST(req: NextRequest) {
   { role: 'system', content: sysPromptCode() },
   { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}` },
 ]
-const codeRaw = await openai(codeMsg, 1800, 0.15)
+const codeRaw = await openai(codeMsg, 1800, 0.1)
 
 // Strip unnecessary fences or whitespace
 const raw = (codeRaw || '').trim();
@@ -228,6 +229,25 @@ if (m) code = m[1].trim();
 
 // Remove any $fn the model set; the client controls tessellation
 code = code.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '');
+
+function violatesAttachPolicy(code: string) {
+  // Detect common "float-away" pattern: mug_diameter/2 + something
+  const floatAway = /translate\(\s*\[\s*mug_diameter\s*\/\s*2\s*\+\s*[\w\.]+\s*,/i.test(code);
+  // Or explicit handle_offset param used to push outward
+  const usesHandleOffset = /\bhandle_offset\b/i.test(code) && /mug_diameter\s*\/\s*2\s*\+\s*handle_offset/i.test(code);
+  return floatAway || usesHandleOffset ? 'float_attach' : null;
+}
+
+const attachIssue = violatesAttachPolicy(code);
+if (attachIssue) {
+  return NextResponse.json({
+    type: 'questions',
+    assistant_text: 'The attachment was placed away from the body. Please confirm an attach overlap (e.g., 0.5 mm), or say "use default overlap". I will regenerate with a fused attachment.',
+    spec: mergedSpec,
+    questions: ['Attach overlap into the wall (mm)? (Typical: 0.3–0.8)'],
+    actions: ['merged_spec', 'policy_guard_triggered', attachIssue],
+  } satisfies ApiResp)
+}
 
 if (!looksLikeSCAD(code)) {
   return NextResponse.json({
