@@ -87,6 +87,8 @@ Rules:
 - For holes/slots, subtract with difference() and ensure through-cuts where requested.
 - Preserve existing spec values; do not change dimensions unless explicitly requested.
 - Use difference() for holes/slots; respect positions, diameters, thickness, etc.
+- Do NOT include Markdown or triple backticks. Return raw OpenSCAD only.
+- Do NOT set $fn; the caller controls tessellation.
 - No prose. No Markdown. RETURN ONLY CODE.`
     .trim()
 }
@@ -215,7 +217,15 @@ export async function POST(req: NextRequest) {
 const codeRaw = await openai(codeMsg, 1800, 0.15)
 
 // Strip unnecessary fences or whitespace
-const code = (codeRaw || '').replace(/```(?:openscad|scad)?/gi, '```').trim()
+const raw = (codeRaw || '').trim();
+
+// Prefer extracting inside a fenced block if present
+let code = raw;
+const m = raw.match(/```(?:openscad|scad)?\s*([\s\S]*?)```/i);
+if (m) code = m[1].trim();
+
+// Remove any $fn the model set; the client controls tessellation
+code = code.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '');
 
 if (!looksLikeSCAD(code)) {
   return NextResponse.json({
