@@ -96,12 +96,12 @@ function looksLikeUpdate(text: string): boolean {
   return hasDims || hasGeo || (!hasQuestion && t.length > 0);
 }
 
-// Parse common dim patterns quickly
+// Parse dimensions provided by the user (supporting inches and mm)
 function parseDims(user: string): Partial<Spec> {
   const out: Partial<Spec> = {};
   const t = (user || "").toLowerCase().replace(/\s+/g, " ").trim();
 
-  // Match 3" x 3" x 0.5" or similar dimension formats
+  // Handle formats like 3" x 3" x 0.5"
   const inTriple = t.match(/(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)\s*[x×]\s*(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)\s*[x×]\s*(\d+(\.\d+)?)\s*(?:["]|in|inch(?:es)?)/i);
   if (inTriple) {
     const a = toNum(inTriple[1]);
@@ -116,7 +116,7 @@ function parseDims(user: string): Partial<Spec> {
     }
   }
 
-  // Match dimensions like 76.2mm x 76.2mm x 12.7mm
+  // Handle 76.2mm x 76.2mm x 12.7mm format
   const mmTriple = t.match(/(\d+(\.\d+)?)\s*mm\s*[x×]\s*(\d+(\.\d+)?)\s*mm\s*[x×]\s*(\d+(\.\d+)?)\s*mm/i);
   if (mmTriple) {
     const a = toNum(mmTriple[1]);
@@ -138,7 +138,7 @@ function generateGeometryCode(spec: Spec): string {
   const thickness = spec.thickness ?? 6;
   const diameter = spec.diameter ?? 0; // Optional hole diameter
 
-  // Simplified logic for generating different types of geometry
+  // Handle different shapes based on the spec
   if (spec.shape === 'bracket') {
     return `// Bracket code
 width = ${width};
@@ -210,14 +210,22 @@ export async function POST(req: Request) {
       } as AIResponse);
     }
 
-    // If all required dimensions are available, generate the model
+    // Parse and convert the dimensions if needed (handle inches to mm)
+    const dims = parseDims(userRequest);
+    if (dims.width || dims.height || dims.thickness) {
+      currentSpec.width = dims.width ?? currentSpec.width;
+      currentSpec.height = dims.height ?? currentSpec.height;
+      currentSpec.thickness = dims.thickness ?? currentSpec.thickness;
+    }
+
+    // If dimensions are now available, generate the model
     const code = generateGeometryCode(currentSpec);
     return NextResponse.json({
       type: "code",
       spec: currentSpec,
       content: code,
     } as AIResponse);
-    
+
   } catch (err: any) {
     console.error("❌ /api/generate error:", err?.message || err);
     return NextResponse.json(
