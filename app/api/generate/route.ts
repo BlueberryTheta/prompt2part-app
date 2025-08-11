@@ -25,6 +25,8 @@ type ApiReq = {
   prompt: string
   history?: Msg[]
   spec?: Spec // last known spec from client
+  // ▼▼▼ ADDED: optional selection from PartViewer (face id / pick point)
+  selection?: { faceIndex?: number; point?: [number, number, number] }
 }
 
 type ApiResp =
@@ -63,6 +65,7 @@ Rules:
 - Never infer capacity/volume or compute new global dimensions from formulas unless the SPEC already includes an explicit target for that quantity (e.g., target_volume_ml).
 - If required info is missing for code, add explicit items to "missing" and ask pointed "questions".
 - NEVER output code here.
+- If SELECTION (faceIndex/point) is provided, treat it as the target surface/region for the user's feature. If placement data is insufficient, add specific items to "missing"/"questions" rather than guessing.
 
 Output STRICT JSON:
 {
@@ -104,8 +107,7 @@ Rules:
   (attach_overlap + local_half_thickness) <= (wall_thickness - 0.2);
   If this cannot be satisfied, reduce the local feature thickness or ask for clarification instead of breaching the cavity.
 
-
-`
+- If SELECTION is provided, use it to place geometry on the specified face/region; do not ignore it. If placement remains ambiguous, do not guess—adhere to SPEC and prior clarified constraints.`
     .trim()
 }
 
@@ -135,7 +137,8 @@ function looksLikeSCAD(code: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, history = [], spec: incomingSpec = {} } = (await req.json()) as ApiReq
+    const { prompt, history = [], spec: incomingSpec = {}, selection } = (await req.json()) as ApiReq
+    // ^^^^^^^ ADDED: selection pulled from request body
 
     // 1) classify intent
     const classifyMsg: Msg[] = [
@@ -182,6 +185,7 @@ export async function POST(req: NextRequest) {
         content:
           `EXISTING_SPEC:\n` +
           JSON.stringify(incomingSpec || {}, null, 2) +
+          (selection ? `\n\nSELECTION:\n${JSON.stringify(selection, null, 2)}` : '') + // <<< ADDED
           `\n\nUSER_REQUEST:\n` +
           prompt,
       },
@@ -228,7 +232,9 @@ export async function POST(req: NextRequest) {
     // 4) generate code if spec is good
     const codeMsg: Msg[] = [
   { role: 'system', content: sysPromptCode() },
-  { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}` },
+  { role: 'user', content: 
+    (selection ? `SELECTION:\n${JSON.stringify(selection, null, 2)}\n\n` : '') + // <<< ADDED
+    `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}` },
 ]
 const codeRaw = await openai(codeMsg, 1800, 0.1)
 
