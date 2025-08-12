@@ -20,6 +20,8 @@ type PartViewerProps = {
   features?: Feature[]
   /** Called when user selects a feature from the list or the scene */
   onFeatureSelect?: (featureId: string | null) => void
+  /** NEW: bubble up scene face picks (so the dashboard can use G# in prompts) */
+  onGroupPick?: (info: { groupId: number; point?: [number, number, number] }) => void
 }
 
 /** ---------- helpers ---------- **/
@@ -247,7 +249,6 @@ function STLModel({
   // Apply external selection (feature click) as a persistent highlight
   useEffect(() => {
     if (selectedGroupId == null) return
-    // If we have a selected point coming from props, use it; otherwise, use the group's centroid
     if (selectedPoint) {
       setHoverPoint(selectedPoint.clone())
     } else {
@@ -297,7 +298,6 @@ function STLModel({
           if (faceToGroup == null) return
           const fi = e.faceIndex ?? -1
           if (fi < 0) {
-            // keep current external selection; don't clear on miss
             return
           }
           const gid = faceToGroup[fi]
@@ -305,8 +305,7 @@ function STLModel({
           setHoverPoint(e.point.clone())
         }}
         onPointerOut={() => {
-          // do not clear selection here; only clear hover if it was mouse-driven
-          // setHoverGid(null); setHoverPoint(null)
+          // keep external selection; do not clear on pointer out
         }}
         onClick={(e) => {
           e.stopPropagation()
@@ -341,7 +340,7 @@ function STLModel({
 
 /** ---------- main viewer + feature list ---------- **/
 
-export default function PartViewer({ stlUrl, features = [], onFeatureSelect }: PartViewerProps) {
+export default function PartViewer({ stlUrl, features = [], onFeatureSelect, onGroupPick }: PartViewerProps) {
   const [picked, setPicked] = useState<{ point: THREE.Vector3; groupId: number } | null>(null)
   const [autoRotate, setAutoRotate] = useState<boolean>(true)
 
@@ -361,11 +360,13 @@ export default function PartViewer({ stlUrl, features = [], onFeatureSelect }: P
     return new THREE.Vector3(x, y, z)
   }, [selectedFeature])
 
-  // When user clicks a face in-scene, clear feature selection (different source of truth)
+  // When user clicks a face in-scene
   const handleScenePick = ({ point, groupId }: { point: THREE.Vector3; groupId: number }) => {
     setPicked({ point, groupId })
     setSelectedFeatureId(null)
     onFeatureSelect?.(null)
+    // NEW: bubble up to parent so it can store G# for prompting
+    onGroupPick?.({ groupId, point: [point.x, point.y, point.z] })
   }
 
   // When user clicks a feature in the list, select and notify

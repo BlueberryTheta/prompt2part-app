@@ -33,6 +33,8 @@ export default function DashboardPage() {
   // NEW: features + selection for PartViewer
   const [features, setFeatures] = useState<Feature[]>([])
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
+  // NEW: record last picked face from the viewer (useful for prompts)
+  const [lastPickedGroup, setLastPickedGroup] = useState<{ groupId: number; point?: [number, number, number] } | null>(null)
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const router = useRouter()
@@ -274,7 +276,7 @@ export default function DashboardPage() {
       // Always show assistant_text
       const assistantText = data?.assistant_text || 'Okay.'
       setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
-      takeSnapshot();  // After updating history
+
       // Always update spec if provided
       if (data?.spec) setSpec(data.spec)
       setAssumptions(data?.assumptions || [])
@@ -289,25 +291,36 @@ export default function DashboardPage() {
           const url = await renderStlFromCodeStrict(code, resolution)
           setStlBlobUrl(url)
 
-          // NEW: append a simple feature entry to the list for this update (heuristic)
+          // NEW: append a simple feature entry to the list for this update (cleaned label)
+          const cleanLabel = userPrompt
+            .replace(/[`"'<>]/g, '')  // strip quotes/backticks
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 80) || 'Update'
           setFeatures(prev => [
             ...prev,
             {
               id: `feat-${Date.now()}`,
-              label: userPrompt.trim().slice(0, 80) || 'Update',
-              // groupId/position can be filled when available from backend later
+              label: cleanLabel,
+              // groupId/position can be filled later when backend returns it
             }
           ])
+
+          // NEW: snapshot AFTER rendering and feature append so Undo/Redo has the new feature list
+          takeSnapshot()
         } catch (e: any) {
           console.error('Render error:', e)
         }
+      } else {
+        // questions / answer — snapshot the convo state change
+        takeSnapshot()
       }
 
       setUserPrompt('')
     } catch (err) {
       console.error('Client submit error:', err)
       setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
-      takeSnapshot();  // After updating history
+      takeSnapshot()  // After updating history
     } finally {
       setLoading(false)
     }
@@ -661,6 +674,8 @@ export default function DashboardPage() {
               stlUrl={stlBlobUrl}
               features={features}
               onFeatureSelect={(id) => setSelectedFeatureId(id)}
+              // NEW: receive G# face picks from the scene
+              onGroupPick={({ groupId, point }) => setLastPickedGroup({ groupId, point })}
             />
             <button
               onClick={handleDownload}
