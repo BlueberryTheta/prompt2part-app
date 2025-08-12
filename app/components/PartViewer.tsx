@@ -126,10 +126,10 @@ function OrientationLabels({ geometry }: { geometry: BufferGeometry | null }) {
   const pad = Math.max(size.length() * 0.04, 6)
 
   const positions = [
-    { name: 'Front', pos: [center.x, center.y - size.y * 0.3, bb.max.z + pad] }, // +Z
-    { name: 'Back', pos: [center.x, center.y - size.y * 0.3, bb.min.z - pad] },  // -Z
-    { name: 'Right', pos: [bb.max.x + pad, center.y - size.y * 0.3, center.z] }, // +X
-    { name: 'Left', pos: [bb.min.x - pad, center.y - size.y * 0.3, center.z] },  // -X
+    { name: 'Front', pos: [center.x, center.y - size.y * 0.7, bb.max.z + pad] }, // +Z
+    { name: 'Back', pos: [center.x, center.y - size.y * 0.7, bb.min.z - pad] },  // -Z
+    { name: 'Right', pos: [bb.max.x + pad, center.y - size.y * 0.9, center.z] }, // +X
+    { name: 'Left', pos: [bb.min.x - pad, center.y - size.y * 1, center.z] },  // -X
     { name: 'Top', pos: [center.x, bb.max.y + pad, center.z] },                  // +Y
     { name: 'Bottom', pos: [center.x, bb.min.y - pad, center.z] },               // -Y
   ] as const
@@ -217,26 +217,29 @@ function STLModel({
 
   useEffect(() => {
     if (!stlUrl) return
-    let mounted = true
+    const ac = new AbortController()
+    let alive = true
     ;(async () => {
       try {
-        const res = await fetch(stlUrl)
+        const res = await fetch(stlUrl, { signal: ac.signal, cache: 'no-store' })
         const buf = await res.arrayBuffer()
+        if (!alive) return
         const loader = new STLLoader()
         const geom = loader.parse(buf)
         geom.computeVertexNormals()
-        if (!mounted) return
+        if (!alive) return
         setGeometry(geom)
-        // Build planar groups
         const { faceToGroup: map, groups } = buildPlanarGroups(geom)
+        if (!alive) return
         setFaceToGroup(map)
         setGroups(groups)
-      } catch (e) {
-        console.error('Failed to load STL:', e)
+      } catch (e: any) {
+        if (e?.name !== 'AbortError') console.error('Failed to load STL:', e)
       }
     })()
     return () => {
-      mounted = false
+      alive = false
+      ac.abort()
     }
   }, [stlUrl])
 
@@ -371,6 +374,7 @@ export default function PartViewer({ stlUrl }: PartViewerProps) {
         <directionalLight position={[50, 50, 50]} intensity={0.7} />
         <OrbitControls enablePan enableZoom enableRotate />
         <STLModel
+          key={stlUrl} /* force remount on new STL */
           stlUrl={stlUrl}
           autoRotate={autoRotate}
           onGroupPick={({ point, groupId }) => setPicked({ point, groupId })}
