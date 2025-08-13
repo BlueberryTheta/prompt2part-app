@@ -7,7 +7,9 @@ import { STLLoader } from 'three-stdlib'
 import * as THREE from 'three'
 import { BufferGeometry, Mesh } from 'three'
 
-type Feature = {
+/** ---------- types ---------- **/
+
+export type Feature = {
   id: string
   label: string
   groupId?: number
@@ -18,10 +20,10 @@ type PartViewerProps = {
   stlUrl: string
   /** Optional list of model features you maintain in the app state */
   features?: Feature[]
-  /** Called when user selects a feature from the list or the scene */
+  /** Called when user selects a feature from the list or the scene (feature list click) */
   onFeatureSelect?: (featureId: string | null) => void
-  /** NEW: bubble up scene face picks (so the dashboard can use G# in prompts) */
-  onGroupPick?: (info: { groupId: number; point?: [number, number, number] }) => void
+  /** Called when the user clicks a planar face in the scene (groupId + 3D point) */
+  onScenePick?: (args: { groupId: number; point: THREE.Vector3 }) => void
 }
 
 /** ---------- helpers ---------- **/
@@ -41,11 +43,16 @@ function computeBoundingBoxInfo(geometry: THREE.BufferGeometry | null) {
 /**
  * Group triangles into logical planar faces by quantizing plane normals & offsets.
  * This collapses hundreds of triangles on a flat face (like a cube side) into 1 group.
- * Note: curved surfaces (cylinders) are *not* planar and will remain multi-triangle.
+ * Note: curved surfaces (cylinders) are *not* planar and stay split.
  */
 function buildPlanarGroups(geometry: BufferGeometry) {
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
-  if (!posAttr) return { faceToGroup: new Int32Array(0), groups: [] as Array<{ id: number; tris: number[]; label: THREE.Vector3 }> }
+  if (!posAttr) {
+    return {
+      faceToGroup: new Int32Array(0),
+      groups: [] as Array<{ id: number; tris: number[]; label: THREE.Vector3 }>,
+    }
+  }
 
   const indexAttr = geometry.getIndex()
   const hasIndex = !!indexAttr
@@ -69,7 +76,7 @@ function buildPlanarGroups(geometry: BufferGeometry) {
   const edge2 = new THREE.Vector3()
   const n = new THREE.Vector3()
 
-  function readVertex(i: number, target: THREE.Vector3) {
+  const readVertex = (i: number, target: THREE.Vector3) => {
     target.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i))
   }
 
@@ -87,10 +94,13 @@ function buildPlanarGroups(geometry: BufferGeometry) {
     n.crossVectors(edge1, edge2).normalize()
     if (!Number.isFinite(n.x) || !Number.isFinite(n.y) || !Number.isFinite(n.z)) continue
 
-    if (n.z < 0) n.multiplyScalar(-1) // stabilize orientation
+    // stabilize orientation (optional)
+    if (n.z < 0) n.multiplyScalar(-1)
 
+    // plane offset
     const d = n.dot(vA)
 
+    // quantize
     const qx = Math.round(n.x / normalQuant) * normalQuant
     const qy = Math.round(n.y / normalQuant) * normalQuant
     const qz = Math.round(n.z / normalQuant) * normalQuant
@@ -98,18 +108,17 @@ function buildPlanarGroups(geometry: BufferGeometry) {
 
     const key = `${qx.toFixed(2)}|${qy.toFixed(2)}|${qz.toFixed(2)}|${qd.toFixed(3)}`
     let gid = keyToGroup.get(key)
+    const centroid = new THREE.Vector3().addVectors(vA, vB).add(vC).multiplyScalar(1 / 3)
+
     if (gid == null) {
       gid = groups.length
       keyToGroup.set(key, gid)
-      const centroid = new THREE.Vector3().addVectors(vA, vB).add(vC).multiplyScalar(1 / 3)
       groups.push({ id: gid, tris: [t], label: centroid })
       faceToGroup[t] = gid
     } else {
-      groups[gid].tris.push(t)
       const g = groups[gid]
-      const count = g.tris.length
-      const centroid = new THREE.Vector3().addVectors(vA, vB).add(vC).multiplyScalar(1 / 3)
-      g.label.lerp(centroid, 1 / count)
+      g.tris.push(t)
+      g.label.lerp(centroid, 1 / g.tris.length) // running average
       faceToGroup[t] = gid
     }
   }
@@ -127,16 +136,16 @@ function OrientationLabels({ geometry }: { geometry: BufferGeometry | null }) {
 
   const positions = [
     { name: 'Front', pos: [center.x, center.y - size.y * 0.3, bb.max.z + pad] }, // +Z
-    { name: 'Back', pos: [center.x, center.y - size.y * 0.3, bb.min.z - pad] },  // -Z
+    { name: 'Back', pos: [center.x, center.y - size.y * 0.3, bb.min.z - pad] }, // -Z
     { name: 'Right', pos: [bb.max.x + pad, center.y - size.y * 0.3, center.z] }, // +X
-    { name: 'Left', pos: [bb.min.x - pad, center.y - size.y * 0.3, center.z] },  // -X
-    { name: 'Top', pos: [center.x, bb.max.y + pad, center.z] },                  // +Y
-    { name: 'Bottom', pos: [center.x, bb.min.y - pad, center.z] },               // -Y
+    { name: 'Left', pos: [bb.min.x - pad, center.y - size.y * 0.3, center.z] }, // -X
+    { name: 'Top', pos: [center.x, bb.max.y + pad, center.z] }, // +Y
+    { name: 'Bottom', pos: [center.x, bb.min.y - pad, center.z] }, // -Y
   ] as const
 
   return (
     <>
-      {positions.map((o) => (
+      {positions.map(o => (
         <Html
           key={o.name}
           position={o.pos as [number, number, number]}
@@ -218,10 +227,12 @@ function STLModel({
   const [hoverGid, setHoverGid] = useState<number | null>(null)
   const [hoverPoint, setHoverPoint] = useState<THREE.Vector3 | null>(null)
 
+  // Load STL with no-store to avoid caching + clean up geometry on unmount
   useEffect(() => {
     if (!stlUrl) return
     const ac = new AbortController()
     let alive = true
+
     ;(async () => {
       try {
         const res = await fetch(stlUrl, { signal: ac.signal, cache: 'no-store' })
@@ -240,9 +251,16 @@ function STLModel({
         if (e?.name !== 'AbortError') console.error('Failed to load STL:', e)
       }
     })()
+
     return () => {
       alive = false
       ac.abort()
+      // dispose geometry/materials on unmount
+      if (meshRef.current) {
+        meshRef.current.geometry?.dispose()
+        // @ts-ignore
+        meshRef.current.material?.dispose?.()
+      }
     }
   }, [stlUrl])
 
@@ -252,7 +270,7 @@ function STLModel({
     if (selectedPoint) {
       setHoverPoint(selectedPoint.clone())
     } else {
-      const g = groups.find((g) => g.id === selectedGroupId)
+      const g = groups.find(g => g.id === selectedGroupId)
       if (g) setHoverPoint(g.label.clone())
     }
     setHoverGid(selectedGroupId)
@@ -297,23 +315,19 @@ function STLModel({
           e.stopPropagation()
           if (faceToGroup == null) return
           const fi = e.faceIndex ?? -1
-          if (fi < 0) {
-            return
-          }
+          if (fi < 0) return
           const gid = faceToGroup[fi]
           setHoverGid(gid >= 0 ? gid : null)
           setHoverPoint(e.point.clone())
         }}
         onPointerOut={() => {
-          // keep external selection; do not clear on pointer out
+          // keep external selection; don't wipe on pointer out
         }}
         onClick={(e) => {
           e.stopPropagation()
           if (faceToGroup == null || e.faceIndex == null) return
           const gid = faceToGroup[e.faceIndex]
-          if (gid >= 0) {
-            onGroupPick({ point: e.point.clone(), groupId: gid })
-          }
+          if (gid >= 0) onGroupPick({ point: e.point.clone(), groupId: gid })
         }}
       />
 
@@ -340,11 +354,16 @@ function STLModel({
 
 /** ---------- main viewer + feature list ---------- **/
 
-export default function PartViewer({ stlUrl, features = [], onFeatureSelect, onGroupPick }: PartViewerProps) {
+export default function PartViewer({
+  stlUrl,
+  features = [],
+  onFeatureSelect,
+  onScenePick,
+}: PartViewerProps) {
   const [picked, setPicked] = useState<{ point: THREE.Vector3; groupId: number } | null>(null)
   const [autoRotate, setAutoRotate] = useState<boolean>(true)
 
-  // Selection coming from the feature list
+  // feature selection within the viewer (list click)
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
 
   const selectedFeature = useMemo(
@@ -360,19 +379,19 @@ export default function PartViewer({ stlUrl, features = [], onFeatureSelect, onG
     return new THREE.Vector3(x, y, z)
   }, [selectedFeature])
 
-  // When user clicks a face in-scene
+  // Scene pick -> bubble up (for your dashboard to map/record), also clear feature list selection
   const handleScenePick = ({ point, groupId }: { point: THREE.Vector3; groupId: number }) => {
     setPicked({ point, groupId })
     setSelectedFeatureId(null)
     onFeatureSelect?.(null)
-    // NEW: bubble up to parent so it can store G# for prompting
-    onGroupPick?.({ groupId, point: [point.x, point.y, point.z] })
+    onScenePick?.({ groupId, point })
   }
 
-  // When user clicks a feature in the list, select and notify
+  // Feature list click -> local selection + callback
   const handleFeatureClick = (f: Feature) => {
     setSelectedFeatureId(f.id)
     onFeatureSelect?.(f.id)
+    setPicked(null) // switch to feature-driven highlight
   }
 
   return (

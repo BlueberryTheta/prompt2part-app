@@ -33,8 +33,12 @@ export default function DashboardPage() {
   // NEW: features + selection for PartViewer
   const [features, setFeatures] = useState<Feature[]>([])
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
-  // NEW: record last picked face from the viewer (useful for prompts)
-  const [lastPickedGroup, setLastPickedGroup] = useState<{ groupId: number; point?: [number, number, number] } | null>(null)
+
+  // NEW: track last scene-picked face/point so we can attach it to features + send to API
+  const [lastScenePick, setLastScenePick] = useState<{ groupId: number; point: [number, number, number] } | null>(null)
+
+  // NEW: bump to force PartViewer remounts when STL changes
+  const [viewerNonce, setViewerNonce] = useState(0)
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const router = useRouter()
@@ -205,10 +209,14 @@ export default function DashboardPage() {
     setResolution(snapshot.resolution)
     setFeatures(snapshot.features) // NEW
 
+    // Revoke old URL before setting a new one
+    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+
     if (snapshot.response) {
       try {
         const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
         setStlBlobUrl(url)
+        setViewerNonce(n => n + 1) // force remount
       } catch (e) {
         console.error('Undo render error:', e)
         setStlBlobUrl(null)
@@ -236,10 +244,13 @@ export default function DashboardPage() {
     setResolution(snapshot.resolution)
     setFeatures(snapshot.features) // NEW
 
+    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+
     if (snapshot.response) {
       try {
         const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
         setStlBlobUrl(url)
+        setViewerNonce(n => n + 1)
       } catch (e) {
         console.error('Redo render error:', e)
         setStlBlobUrl(null)
@@ -253,6 +264,23 @@ export default function DashboardPage() {
   // state:
   const [spec, setSpec] = useState<Spec>({ units: 'mm' })
   const [assumptions, setAssumptions] = useState<string[]>([])
+
+  // Small helper to build cleaner feature labels from the user prompt
+  function buildFeatureLabelFromPrompt(p: string) {
+    const txt = p.toLowerCase()
+    const face = (txt.match(/\b(?:g|face\s*g)(\d+)\b/i) || [])[1]
+    const hasBoss = /\b(boss|extrude|pad|protrusion)\b/.test(txt)
+    const hasHole = /\b(hole|drill|cut|pocket)\b/.test(txt)
+    const hasFillet = /\b(fillet|round|radius)\b/.test(txt)
+    const hasChamfer = /\b(chamfer|bevel)\b/.test(txt)
+    const dims = (txt.match(/\b(\d+(\.\d+)?)\s*(mm|in|")\b/g) || []).join(' ')
+    const action =
+      hasBoss ? 'Boss' :
+      hasHole ? 'Hole' :
+      hasFillet ? 'Fillet' :
+      hasChamfer ? 'Chamfer' : 'Feature'
+    return `${action}${face ? ` on G${face}` : ''}${dims ? ` — ${dims}` : ''}`
+  }
 
   // handleSubmit:
   const handleSubmit = async () => {
@@ -269,6 +297,11 @@ export default function DashboardPage() {
           prompt: userPrompt,
           history: baseHistory, // chat as-is
           spec,                  // 🚀 keep spec in the loop
+          // NEW: provide UI context so the model "remembers" the selected face/point
+          ui_context: lastScenePick ? {
+            selected_group: lastScenePick.groupId,
+            selected_point: lastScenePick.point
+          } : undefined,
         }),
       })
       const data = await res.json()
@@ -276,7 +309,7 @@ export default function DashboardPage() {
       // Always show assistant_text
       const assistantText = data?.assistant_text || 'Okay.'
       setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
-
+      takeSnapshot();  // After updating history
       // Always update spec if provided
       if (data?.spec) setSpec(data.spec)
       setAssumptions(data?.assumptions || [])
@@ -288,39 +321,39 @@ export default function DashboardPage() {
 
         // Render STL
         try {
+          if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl) // revoke previous before replacing
           const url = await renderStlFromCodeStrict(code, resolution)
           setStlBlobUrl(url)
+          setViewerNonce(n => n + 1) // force viewer remount
 
-          // NEW: append a simple feature entry to the list for this update (cleaned label)
-          const cleanLabel = userPrompt
-            .replace(/[`"'<>]/g, '')  // strip quotes/backticks
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 80) || 'Update'
+          // NEW: append a better feature entry tied to a face when available
+          const faceFromPrompt = (() => {
+            const m = userPrompt.match(/\b(?:g|face\s*g)(\d+)\b/i)
+            return m ? Number(m[1]) : undefined
+          })()
+          const groupId = faceFromPrompt ?? lastScenePick?.groupId
+          const position = lastScenePick?.point
+
           setFeatures(prev => [
             ...prev,
             {
               id: `feat-${Date.now()}`,
-              label: cleanLabel,
-              // groupId/position can be filled later when backend returns it
+              label: buildFeatureLabelFromPrompt(userPrompt),
+              groupId,
+              position,
             }
           ])
-
-          // NEW: snapshot AFTER rendering and feature append so Undo/Redo has the new feature list
-          takeSnapshot()
+          setLastScenePick(null) // consume it after we used it
         } catch (e: any) {
           console.error('Render error:', e)
         }
-      } else {
-        // questions / answer — snapshot the convo state change
-        takeSnapshot()
       }
 
       setUserPrompt('')
     } catch (err) {
       console.error('Client submit error:', err)
       setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
-      takeSnapshot()  // After updating history
+      takeSnapshot();  // After updating history
     } finally {
       setLoading(false)
     }
@@ -375,12 +408,15 @@ export default function DashboardPage() {
     setUserPrompt('')
     setResponse('')
     setCodeGenerated(false)
+    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
     setStlBlobUrl(null)
     setCurrentProjectId(null)
     setPastStates([])
     setFutureStates([])
     setFeatures([])               // NEW: clear features
     setSelectedFeatureId(null)    // optional
+    setViewerNonce(n => n + 1)    // ensure clean viewer
+    setLastScenePick(null)
   }
 
   const handleUpdateProject = async () => {
@@ -414,11 +450,15 @@ export default function DashboardPage() {
     setHistory(project.history ?? [])
     setFeatures([])               // NEW: reset features unless you load them from DB
     setSelectedFeatureId(null)    // optional
+    setLastScenePick(null)
+
+    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
 
     if (project.response) {
       try {
         const url = await renderStlFromCodeStrict(project.response, resolution)
         setStlBlobUrl(url)
+        setViewerNonce(n => n + 1)
       } catch (e) {
         console.error('Error rendering saved project:', e)
         setStlBlobUrl(null)
@@ -446,9 +486,12 @@ export default function DashboardPage() {
       setResponse('')
       setHistory([])
       setCodeGenerated(false)
+      if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
       setStlBlobUrl(null)
       setFeatures([])             // NEW: clear on delete of current project
       setSelectedFeatureId(null)  // optional
+      setViewerNonce(n => n + 1)
+      setLastScenePick(null)
     }
   }
 
@@ -670,13 +713,30 @@ export default function DashboardPage() {
         {stlBlobUrl ? (
           <>
             <PartViewer
-              key={stlBlobUrl}                 // ensure fresh mount on new STL
-              stlUrl={stlBlobUrl}
-              features={features}
-              onFeatureSelect={(id) => setSelectedFeatureId(id)}
-              // NEW: receive G# face picks from the scene
-              onGroupPick={({ groupId, point }) => setLastPickedGroup({ groupId, point })}
-            />
+  key={stlBlobUrl}
+  stlUrl={stlBlobUrl}
+  features={features}
+  onFeatureSelect={(id) => setSelectedFeatureId(id)}
+  onScenePick={({ groupId, point }) => {
+    // Convert Vector3 -> tuple
+    const pos: [number, number, number] = [point.x, point.y, point.z]
+
+    // (optional) create or update a feature for this face pick
+    const newFeatureId = `pick-G${groupId}-${Date.now()}`
+    setFeatures(prev => [
+      ...prev,
+      {
+        id: newFeatureId,
+        label: `Face G${groupId} (picked)`,
+        groupId,
+        position: pos,
+      },
+    ])
+
+    // (optional) auto-select the new feature so it highlights immediately
+    setSelectedFeatureId(newFeatureId)
+  }}
+/>
             <button
               onClick={handleDownload}
               className="bg-gray-900 text-white px-4 py-2 rounded hover:bg-black transition font-medium"
