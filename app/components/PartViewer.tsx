@@ -23,7 +23,7 @@ type PartViewerProps = {
   /** Called when user selects a feature from the list or the scene (feature list click) */
   onFeatureSelect?: (featureId: string | null) => void
   /** Called when the user clicks a planar face in the scene (groupId + 3D point) */
-  onScenePick?: (args: { groupId: number; point: THREE.Vector3 }) => void
+  onScenePick?: (args: { groupId: number; point: [number, number, number] }) => void
 }
 
 /** ---------- helpers ---------- **/
@@ -138,9 +138,9 @@ function OrientationLabels({ geometry }: { geometry: BufferGeometry | null }) {
     { name: 'Front', pos: [center.x, center.y - size.y * 0.3, bb.max.z + pad] }, // +Z
     { name: 'Back', pos: [center.x, center.y - size.y * 0.3, bb.min.z - pad] }, // -Z
     { name: 'Right', pos: [bb.max.x + pad, center.y - size.y * 0.3, center.z] }, // +X
-    { name: 'Left', pos: [bb.min.x - pad, center.y - size.y * 0.3, center.z] }, // -X
-    { name: 'Top', pos: [center.x, bb.max.y + pad, center.z] }, // +Y
-    { name: 'Bottom', pos: [center.x, bb.min.y - pad, center.z] }, // -Y
+    { name: 'Left', pos: [bb.min.x - pad, center.y - size.y * 0.3, center.z] },  // -X
+    { name: 'Top', pos: [center.x, bb.max.y + pad, center.z] },                  // +Y
+    { name: 'Bottom', pos: [center.x, bb.min.y - pad, center.z] },               // -Y
   ] as const
 
   return (
@@ -384,7 +384,8 @@ export default function PartViewer({
     setPicked({ point, groupId })
     setSelectedFeatureId(null)
     onFeatureSelect?.(null)
-    onScenePick?.({ groupId, point })
+    // >>> changed: send tuple, not Vector3
+    onScenePick?.({ groupId, point: [point.x, point.y, point.z] })
   }
 
   // Feature list click -> local selection + callback

@@ -34,9 +34,15 @@ export default function DashboardPage() {
   const [features, setFeatures] = useState<Feature[]>([])
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
 
+  // NEW: store last picked face to send to API as `selection`
+  const [pickedSelection, setPickedSelection] = useState<{ faceIndex?: number; point?: [number, number, number] } | null>(null)
+
   // NEW: force viewer remount counter + previous blob URL ref for revocation
   const [viewerVersion, setViewerVersion] = useState(0)
   const prevBlobRef = useRef<string | null>(null)
+
+  // NEW: only keep the newest /api/generate response
+  const reqIdRef = useRef(0)
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const router = useRouter()
@@ -261,7 +267,6 @@ export default function DashboardPage() {
   function buildFeaturesFromSpec(spec?: Spec | null): Feature[] {
     if (!spec || !Array.isArray(spec.features)) return []
 
-    // running counters per type
     const counters: Record<string, number> = {}
     const out: Feature[] = []
 
@@ -275,14 +280,12 @@ export default function DashboardPage() {
       const m = faceStr.match(/^G(\d+)$/i)
       if (m) groupId = parseInt(m[1], 10)
 
-      // human label (cube 1 / cylinder 2 / hole 1 ...)
       const label = `${type} ${counters[type]}`
 
       out.push({
         id: `${type}-${counters[type]}`,
         label,
         groupId,
-        // position could be added if backend emits a centroid/point later
       })
     }
     return out
@@ -294,6 +297,9 @@ export default function DashboardPage() {
 
   const handleSubmit = async () => {
     if (!userPrompt) return
+
+    // bump request id to invalidate older responses
+    const myReqId = ++reqIdRef.current
     setLoading(true)
 
     const baseHistory: ChatMsg[] = [...history, { role: 'user', content: userPrompt }]
@@ -304,13 +310,16 @@ export default function DashboardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: userPrompt,
-          history: baseHistory, // chat as-is
-          spec,                 // keep spec in the loop
-          // If you want to send a currently picked face/point from viewer, add it here
-          // selection: { faceIndex: ..., point: [...] }
+          history: baseHistory,
+          spec,
+          // NEW: pass the picked face/point (if any)
+          selection: pickedSelection ?? undefined,
         }),
       })
+
       const data = await res.json()
+      // Ignore if a newer request finished first
+      if (reqIdRef.current !== myReqId) return
 
       // Always show assistant_text
       const assistantText = data?.assistant_text || 'Okay.'
@@ -320,7 +329,6 @@ export default function DashboardPage() {
       // Always update spec if provided
       if (data?.spec) {
         setSpec(data.spec)
-        // Rebuild features from server spec so the list stays accurate + sensible names
         const newFeatures = buildFeaturesFromSpec(data.spec)
         setFeatures(newFeatures)
         setSelectedFeatureId(null)
@@ -338,7 +346,9 @@ export default function DashboardPage() {
           if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
           prevBlobRef.current = url
           setStlBlobUrl(url)
-          setViewerVersion(v => v + 1) // <<< force the Canvas/model to fully remount
+          setViewerVersion(v => v + 1) // force the Canvas/model to fully remount
+          // After a successful render, clear the transient selection
+          setPickedSelection(null)
         } catch (e: any) {
           console.error('Render error:', e)
         }
@@ -346,11 +356,14 @@ export default function DashboardPage() {
 
       setUserPrompt('')
     } catch (err) {
+      // Ignore if a newer request finished first
+      if (reqIdRef.current !== myReqId) return
       console.error('Client submit error:', err)
       setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
-      takeSnapshot() // After updating history
+      takeSnapshot()
     } finally {
-      setLoading(false)
+      // Only turn off loading if this is still the latest
+      if (reqIdRef.current === myReqId) setLoading(false)
     }
   }
 
@@ -411,6 +424,7 @@ export default function DashboardPage() {
     setFutureStates([])
     setFeatures([])
     setSelectedFeatureId(null)
+    setPickedSelection(null)
   }
 
   const handleUpdateProject = async () => {
@@ -444,6 +458,7 @@ export default function DashboardPage() {
     setHistory(project.history ?? [])
     setFeatures([])
     setSelectedFeatureId(null)
+    setPickedSelection(null)
 
     if (project.response) {
       try {
@@ -485,6 +500,7 @@ export default function DashboardPage() {
       setViewerVersion(v => v + 1)
       setFeatures([])
       setSelectedFeatureId(null)
+      setPickedSelection(null)
     }
   }
 
@@ -710,6 +726,13 @@ export default function DashboardPage() {
               stlUrl={stlBlobUrl}
               features={features}
               onFeatureSelect={(id) => setSelectedFeatureId(id)}
+              // NEW: capture scene picks and turn them into a selection we send to the API
+              onScenePick={({ groupId, point }) => {
+                setPickedSelection({
+                  faceIndex: typeof groupId === 'number' ? groupId : undefined,
+                  point,
+                })
+              }}
             />
             <button
               onClick={handleDownload}
