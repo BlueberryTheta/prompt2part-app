@@ -8,7 +8,7 @@ import { Spec } from '../api/generate/route'
 
 type ChatMsg = { role: 'user' | 'assistant'; content: string }
 
-// NEW: Feature type for PartViewer list/selection
+// Feature type for PartViewer list/selection
 type Feature = {
   id: string
   label: string
@@ -30,15 +30,13 @@ export default function DashboardPage() {
   const [darkMode, setDarkMode] = useState(false)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
 
-  // NEW: features + selection for PartViewer
+  // Feature list and selection (used by PartViewer)
   const [features, setFeatures] = useState<Feature[]>([])
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
 
-  // NEW: track last scene-picked face/point so we can attach it to features + send to API
-  const [lastScenePick, setLastScenePick] = useState<{ groupId: number; point: [number, number, number] } | null>(null)
-
-  // NEW: bump to force PartViewer remounts when STL changes
-  const [viewerNonce, setViewerNonce] = useState(0)
+  // NEW: force viewer remount counter + previous blob URL ref for revocation
+  const [viewerVersion, setViewerVersion] = useState(0)
+  const prevBlobRef = useRef<string | null>(null)
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const router = useRouter()
@@ -52,7 +50,7 @@ export default function DashboardPage() {
     codeGenerated: boolean
     currentProjectId: string | null
     resolution: number
-    features: Feature[]            // NEW: include features in snapshots
+    features: Feature[]
   }
   const [pastStates, setPastStates] = useState<ModelSnapshot[]>([])
   const [futureStates, setFutureStates] = useState<ModelSnapshot[]>([])
@@ -67,7 +65,7 @@ export default function DashboardPage() {
         codeGenerated,
         currentProjectId,
         resolution,
-        features,                  // NEW
+        features,
       },
     ])
     setFutureStates([])
@@ -98,7 +96,7 @@ export default function DashboardPage() {
     fetchData()
   }, [router])
 
-  // === Prompt helper ===
+  // === Prompt helpers (unchanged) ===
   function buildGuidedPrompt(currentCode: string, userInstruction: string, res: number) {
     return [
       'You are an expert OpenSCAD assistant. Build a new model or modify the existing model as requested.',
@@ -207,16 +205,15 @@ export default function DashboardPage() {
     setCodeGenerated(snapshot.codeGenerated)
     setCurrentProjectId(snapshot.currentProjectId)
     setResolution(snapshot.resolution)
-    setFeatures(snapshot.features) // NEW
-
-    // Revoke old URL before setting a new one
-    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+    setFeatures(snapshot.features)
 
     if (snapshot.response) {
       try {
         const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
+        if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
+        prevBlobRef.current = url
         setStlBlobUrl(url)
-        setViewerNonce(n => n + 1) // force remount
+        setViewerVersion(v => v + 1) // force viewer remount
       } catch (e) {
         console.error('Undo render error:', e)
         setStlBlobUrl(null)
@@ -242,15 +239,15 @@ export default function DashboardPage() {
     setCodeGenerated(snapshot.codeGenerated)
     setCurrentProjectId(snapshot.currentProjectId)
     setResolution(snapshot.resolution)
-    setFeatures(snapshot.features) // NEW
-
-    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+    setFeatures(snapshot.features)
 
     if (snapshot.response) {
       try {
         const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
+        if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
+        prevBlobRef.current = url
         setStlBlobUrl(url)
-        setViewerNonce(n => n + 1)
+        setViewerVersion(v => v + 1) // force viewer remount
       } catch (e) {
         console.error('Redo render error:', e)
         setStlBlobUrl(null)
@@ -260,29 +257,41 @@ export default function DashboardPage() {
     }
   }
 
+  // --- Feature list: build from server spec.features with clean names + groupId ---
+  function buildFeaturesFromSpec(spec?: Spec | null): Feature[] {
+    if (!spec || !Array.isArray(spec.features)) return []
+
+    // running counters per type
+    const counters: Record<string, number> = {}
+    const out: Feature[] = []
+
+    for (const f of spec.features as any[]) {
+      const type: string = (f?.type || 'feature').toString().toLowerCase()
+      counters[type] = (counters[type] || 0) + 1
+
+      // parse base_face like "G12" -> 12
+      let groupId: number | undefined
+      const faceStr = (f?.base_face || f?.face || f?.on_face || '').toString()
+      const m = faceStr.match(/^G(\d+)$/i)
+      if (m) groupId = parseInt(m[1], 10)
+
+      // human label (cube 1 / cylinder 2 / hole 1 ...)
+      const label = `${type} ${counters[type]}`
+
+      out.push({
+        id: `${type}-${counters[type]}`,
+        label,
+        groupId,
+        // position could be added if backend emits a centroid/point later
+      })
+    }
+    return out
+  }
+
   // === Submit ===
-  // state:
   const [spec, setSpec] = useState<Spec>({ units: 'mm' })
   const [assumptions, setAssumptions] = useState<string[]>([])
 
-  // Small helper to build cleaner feature labels from the user prompt
-  function buildFeatureLabelFromPrompt(p: string) {
-    const txt = p.toLowerCase()
-    const face = (txt.match(/\b(?:g|face\s*g)(\d+)\b/i) || [])[1]
-    const hasBoss = /\b(boss|extrude|pad|protrusion)\b/.test(txt)
-    const hasHole = /\b(hole|drill|cut|pocket)\b/.test(txt)
-    const hasFillet = /\b(fillet|round|radius)\b/.test(txt)
-    const hasChamfer = /\b(chamfer|bevel)\b/.test(txt)
-    const dims = (txt.match(/\b(\d+(\.\d+)?)\s*(mm|in|")\b/g) || []).join(' ')
-    const action =
-      hasBoss ? 'Boss' :
-      hasHole ? 'Hole' :
-      hasFillet ? 'Fillet' :
-      hasChamfer ? 'Chamfer' : 'Feature'
-    return `${action}${face ? ` on G${face}` : ''}${dims ? ` — ${dims}` : ''}`
-  }
-
-  // handleSubmit:
   const handleSubmit = async () => {
     if (!userPrompt) return
     setLoading(true)
@@ -296,12 +305,9 @@ export default function DashboardPage() {
         body: JSON.stringify({
           prompt: userPrompt,
           history: baseHistory, // chat as-is
-          spec,                  // 🚀 keep spec in the loop
-          // NEW: provide UI context so the model "remembers" the selected face/point
-          ui_context: lastScenePick ? {
-            selected_group: lastScenePick.groupId,
-            selected_point: lastScenePick.point
-          } : undefined,
+          spec,                 // keep spec in the loop
+          // If you want to send a currently picked face/point from viewer, add it here
+          // selection: { faceIndex: ..., point: [...] }
         }),
       })
       const data = await res.json()
@@ -309,9 +315,16 @@ export default function DashboardPage() {
       // Always show assistant_text
       const assistantText = data?.assistant_text || 'Okay.'
       setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
-      takeSnapshot();  // After updating history
+      takeSnapshot() // After updating history
+
       // Always update spec if provided
-      if (data?.spec) setSpec(data.spec)
+      if (data?.spec) {
+        setSpec(data.spec)
+        // Rebuild features from server spec so the list stays accurate + sensible names
+        const newFeatures = buildFeaturesFromSpec(data.spec)
+        setFeatures(newFeatures)
+        setSelectedFeatureId(null)
+      }
       setAssumptions(data?.assumptions || [])
 
       if (data?.type === 'code' && data?.code) {
@@ -321,29 +334,11 @@ export default function DashboardPage() {
 
         // Render STL
         try {
-          if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl) // revoke previous before replacing
           const url = await renderStlFromCodeStrict(code, resolution)
+          if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
+          prevBlobRef.current = url
           setStlBlobUrl(url)
-          setViewerNonce(n => n + 1) // force viewer remount
-
-          // NEW: append a better feature entry tied to a face when available
-          const faceFromPrompt = (() => {
-            const m = userPrompt.match(/\b(?:g|face\s*g)(\d+)\b/i)
-            return m ? Number(m[1]) : undefined
-          })()
-          const groupId = faceFromPrompt ?? lastScenePick?.groupId
-          const position = lastScenePick?.point
-
-          setFeatures(prev => [
-            ...prev,
-            {
-              id: `feat-${Date.now()}`,
-              label: buildFeatureLabelFromPrompt(userPrompt),
-              groupId,
-              position,
-            }
-          ])
-          setLastScenePick(null) // consume it after we used it
+          setViewerVersion(v => v + 1) // <<< force the Canvas/model to fully remount
         } catch (e: any) {
           console.error('Render error:', e)
         }
@@ -353,7 +348,7 @@ export default function DashboardPage() {
     } catch (err) {
       console.error('Client submit error:', err)
       setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
-      takeSnapshot();  // After updating history
+      takeSnapshot() // After updating history
     } finally {
       setLoading(false)
     }
@@ -379,7 +374,6 @@ export default function DashboardPage() {
     const { data: { user }, error } = await supabase.auth.getUser()
     if (error || !user) return
 
-    // return the inserted row so we can set currentProjectId
     const { data: inserted, error: insertError } = await supabase
       .from('projects')
       .insert({
@@ -408,15 +402,15 @@ export default function DashboardPage() {
     setUserPrompt('')
     setResponse('')
     setCodeGenerated(false)
-    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+    if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
+    prevBlobRef.current = null
     setStlBlobUrl(null)
+    setViewerVersion(v => v + 1)
     setCurrentProjectId(null)
     setPastStates([])
     setFutureStates([])
-    setFeatures([])               // NEW: clear features
-    setSelectedFeatureId(null)    // optional
-    setViewerNonce(n => n + 1)    // ensure clean viewer
-    setLastScenePick(null)
+    setFeatures([])
+    setSelectedFeatureId(null)
   }
 
   const handleUpdateProject = async () => {
@@ -448,17 +442,16 @@ export default function DashboardPage() {
     setResponse(project.response || '')
     setCodeGenerated(!!project.response)
     setHistory(project.history ?? [])
-    setFeatures([])               // NEW: reset features unless you load them from DB
-    setSelectedFeatureId(null)    // optional
-    setLastScenePick(null)
-
-    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+    setFeatures([])
+    setSelectedFeatureId(null)
 
     if (project.response) {
       try {
         const url = await renderStlFromCodeStrict(project.response, resolution)
+        if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
+        prevBlobRef.current = url
         setStlBlobUrl(url)
-        setViewerNonce(n => n + 1)
+        setViewerVersion(v => v + 1) // re-mount viewer on load
       } catch (e) {
         console.error('Error rendering saved project:', e)
         setStlBlobUrl(null)
@@ -486,12 +479,12 @@ export default function DashboardPage() {
       setResponse('')
       setHistory([])
       setCodeGenerated(false)
-      if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+      if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
+      prevBlobRef.current = null
       setStlBlobUrl(null)
-      setFeatures([])             // NEW: clear on delete of current project
-      setSelectedFeatureId(null)  // optional
-      setViewerNonce(n => n + 1)
-      setLastScenePick(null)
+      setViewerVersion(v => v + 1)
+      setFeatures([])
+      setSelectedFeatureId(null)
     }
   }
 
@@ -713,30 +706,11 @@ export default function DashboardPage() {
         {stlBlobUrl ? (
           <>
             <PartViewer
-  key={stlBlobUrl}
-  stlUrl={stlBlobUrl}
-  features={features}
-  onFeatureSelect={(id) => setSelectedFeatureId(id)}
-  onScenePick={({ groupId, point }) => {
-    // Convert Vector3 -> tuple
-    const pos: [number, number, number] = [point.x, point.y, point.z]
-
-    // (optional) create or update a feature for this face pick
-    const newFeatureId = `pick-G${groupId}-${Date.now()}`
-    setFeatures(prev => [
-      ...prev,
-      {
-        id: newFeatureId,
-        label: `Face G${groupId} (picked)`,
-        groupId,
-        position: pos,
-      },
-    ])
-
-    // (optional) auto-select the new feature so it highlights immediately
-    setSelectedFeatureId(newFeatureId)
-  }}
-/>
+              key={`${viewerVersion}:${stlBlobUrl}`}  // ensure fresh mount on every new STL/refresh
+              stlUrl={stlBlobUrl}
+              features={features}
+              onFeatureSelect={(id) => setSelectedFeatureId(id)}
+            />
             <button
               onClick={handleDownload}
               className="bg-gray-900 text-white px-4 py-2 rounded hover:bg-black transition font-medium"
