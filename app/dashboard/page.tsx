@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import PartViewer from '../components/PartViewer'
@@ -8,7 +8,7 @@ import { Spec } from '../api/generate/route'
 
 type ChatMsg = { role: 'user' | 'assistant'; content: string }
 
-// Feature type for PartViewer list/selection
+// Keep in sync with PartViewer
 type Feature = {
   id: string
   label: string
@@ -19,30 +19,24 @@ type Feature = {
 export default function DashboardPage() {
   const [userPrompt, setUserPrompt] = useState('')
   const [history, setHistory] = useState<ChatMsg[]>([])
-  const [response, setResponse] = useState('')                    // OpenSCAD code (when present)
+  const [response, setResponse] = useState('') // OpenSCAD code (when present)
   const [codeGenerated, setCodeGenerated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [projects, setProjects] = useState<any[]>([])
   const [showSaveSuccess, setShowSaveSuccess] = useState(false)
   const [stlBlobUrl, setStlBlobUrl] = useState<string | null>(null)
+  const [renderVersion, setRenderVersion] = useState(0) // force viewer remounts
   const [resolution, setResolution] = useState(100)
   const [darkMode, setDarkMode] = useState(false)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
 
-  // Feature list and selection (used by PartViewer)
+  // Feature tree + selection
   const [features, setFeatures] = useState<Feature[]>([])
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
 
-  // NEW: store last picked face to send to API as `selection`
-  const [pickedSelection, setPickedSelection] = useState<{ faceIndex?: number; point?: [number, number, number] } | null>(null)
-
-  // NEW: force viewer remount counter + previous blob URL ref for revocation
-  const [viewerVersion, setViewerVersion] = useState(0)
-  const prevBlobRef = useRef<string | null>(null)
-
-  // NEW: only keep the newest /api/generate response
-  const reqIdRef = useRef(0)
+  // Last scene pick (to send to backend as selection)
+  const [lastScenePick, setLastScenePick] = useState<{ groupId: number; point: [number, number, number] } | null>(null)
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const router = useRouter()
@@ -78,13 +72,15 @@ export default function DashboardPage() {
   }
 
   // === Config ===
-  const RENDER_URL =
-    process.env.NEXT_PUBLIC_RENDER_URL || 'http://localhost:8000/render'
+  const RENDER_URL = process.env.NEXT_PUBLIC_RENDER_URL || 'http://localhost:8000/render'
 
   // === Session + projects ===
   useEffect(() => {
     const fetchData = async () => {
-      const { data: { session }, error } = await supabase.auth.getSession()
+      const {
+        data: { session },
+        error,
+      } = await supabase.auth.getSession()
       if (!session || error) {
         router.push('/login')
         return
@@ -102,7 +98,7 @@ export default function DashboardPage() {
     fetchData()
   }, [router])
 
-  // === Prompt helpers (unchanged) ===
+  // === Prompt helper (kept for reference paths you already use) ===
   function buildGuidedPrompt(currentCode: string, userInstruction: string, res: number) {
     return [
       'You are an expert OpenSCAD assistant. Build a new model or modify the existing model as requested.',
@@ -150,6 +146,7 @@ export default function DashboardPage() {
     const backendRes = await fetch(RENDER_URL, {
       method: 'POST',
       body: formData,
+      cache: 'no-store',
     })
 
     const cloneText = await backendRes.clone().text()
@@ -165,6 +162,8 @@ export default function DashboardPage() {
     const blob = await backendRes.blob()
     if (!blob || blob.size === 0) throw new Error('Empty STL blob received.')
 
+    // revoke previous to ensure viewer refresh & no leaks
+    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
     return URL.createObjectURL(blob)
   }
 
@@ -216,10 +215,8 @@ export default function DashboardPage() {
     if (snapshot.response) {
       try {
         const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
-        if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
-        prevBlobRef.current = url
         setStlBlobUrl(url)
-        setViewerVersion(v => v + 1) // force viewer remount
+        setRenderVersion(v => v + 1)
       } catch (e) {
         console.error('Undo render error:', e)
         setStlBlobUrl(null)
@@ -250,10 +247,8 @@ export default function DashboardPage() {
     if (snapshot.response) {
       try {
         const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
-        if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
-        prevBlobRef.current = url
         setStlBlobUrl(url)
-        setViewerVersion(v => v + 1) // force viewer remount
+        setRenderVersion(v => v + 1)
       } catch (e) {
         console.error('Redo render error:', e)
         setStlBlobUrl(null)
@@ -263,32 +258,45 @@ export default function DashboardPage() {
     }
   }
 
-  // --- Feature list: build from server spec.features with clean names + groupId ---
-  function buildFeaturesFromSpec(spec?: Spec | null): Feature[] {
-    if (!spec || !Array.isArray(spec.features)) return []
+  // === Feature utilities ===
+  function normalizeFeatureList(spec?: Spec): Feature[] {
+    const list = (spec?.features || []) as any[]
+    if (!Array.isArray(list) || list.length === 0) return []
 
-    const counters: Record<string, number> = {}
+    const typeCounts = new Map<string, number>()
     const out: Feature[] = []
 
-    for (const f of spec.features as any[]) {
-      const type: string = (f?.type || 'feature').toString().toLowerCase()
-      counters[type] = (counters[type] || 0) + 1
+    for (const f of list) {
+      const t = (f?.type || 'feature').toString().toLowerCase()
+      const next = (typeCounts.get(t) || 0) + 1
+      typeCounts.set(t, next)
 
-      // parse base_face like "G12" -> 12
-      let groupId: number | undefined
-      const faceStr = (f?.base_face || f?.face || f?.on_face || '').toString()
-      const m = faceStr.match(/^G(\d+)$/i)
-      if (m) groupId = parseInt(m[1], 10)
+      const prettyType = t.charAt(0).toUpperCase() + t.slice(1)
+      const id = `${t}-${next}`
 
-      const label = `${type} ${counters[type]}`
+      // Carry over group hint if present (e.g., base_face: "G1")
+      let groupId: number | undefined = undefined
+      const baseFace = f?.base_face || f?.face || f?.faceIndex
+      if (typeof baseFace === 'string' && /^G\d+$/.test(baseFace)) {
+        groupId = parseInt(baseFace.slice(1), 10)
+      }
 
       out.push({
-        id: `${type}-${counters[type]}`,
-        label,
+        id,
+        label: `${prettyType} ${next}`,
         groupId,
       })
     }
     return out
+  }
+
+  function mergeFeaturesFromSpec(spec?: Spec) {
+    const fresh = normalizeFeatureList(spec)
+    setFeatures(fresh)
+    // If selection points to a feature that disappeared, clear selection
+    if (selectedFeatureId && !fresh.find(f => f.id === selectedFeatureId)) {
+      setSelectedFeatureId(null)
+    }
   }
 
   // === Submit ===
@@ -297,10 +305,10 @@ export default function DashboardPage() {
 
   const handleSubmit = async () => {
     if (!userPrompt) return
-
-    // bump request id to invalidate older responses
-    const myReqId = ++reqIdRef.current
     setLoading(true)
+
+    // Snapshot BEFORE mutating so Undo returns to the current state
+    takeSnapshot()
 
     const baseHistory: ChatMsg[] = [...history, { role: 'user', content: userPrompt }]
 
@@ -312,26 +320,26 @@ export default function DashboardPage() {
           prompt: userPrompt,
           history: baseHistory,
           spec,
-          // NEW: pass the picked face/point (if any)
-          selection: pickedSelection ?? undefined,
+          selection: lastScenePick
+            ? {
+                faceIndex: lastScenePick.groupId,
+                point: lastScenePick.point,
+              }
+            : undefined,
         }),
+        cache: 'no-store',
       })
-
       const data = await res.json()
-      // Ignore if a newer request finished first
-      if (reqIdRef.current !== myReqId) return
 
       // Always show assistant_text
       const assistantText = data?.assistant_text || 'Okay.'
       setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
-      takeSnapshot() // After updating history
 
       // Always update spec if provided
       if (data?.spec) {
-        setSpec(data.spec)
-        const newFeatures = buildFeaturesFromSpec(data.spec)
-        setFeatures(newFeatures)
-        setSelectedFeatureId(null)
+        setSpec(data.spec as Spec)
+        // Keep the feature tree in sync with what the model says it added/changed
+        mergeFeaturesFromSpec(data.spec as Spec)
       }
       setAssumptions(data?.assumptions || [])
 
@@ -343,12 +351,8 @@ export default function DashboardPage() {
         // Render STL
         try {
           const url = await renderStlFromCodeStrict(code, resolution)
-          if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
-          prevBlobRef.current = url
           setStlBlobUrl(url)
-          setViewerVersion(v => v + 1) // force the Canvas/model to fully remount
-          // After a successful render, clear the transient selection
-          setPickedSelection(null)
+          setRenderVersion(v => v + 1) // key bump to force Canvas remount
         } catch (e: any) {
           console.error('Render error:', e)
         }
@@ -356,20 +360,18 @@ export default function DashboardPage() {
 
       setUserPrompt('')
     } catch (err) {
-      // Ignore if a newer request finished first
-      if (reqIdRef.current !== myReqId) return
       console.error('Client submit error:', err)
       setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
-      takeSnapshot()
     } finally {
-      // Only turn off loading if this is still the latest
-      if (reqIdRef.current === myReqId) setLoading(false)
+      setLoading(false)
     }
   }
 
   // === Projects: Save new / Update / Load / Rename / Delete ===
   const refreshProjects = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
     if (!user) return
     const { data } = await supabase
       .from('projects')
@@ -384,7 +386,10 @@ export default function DashboardPage() {
     const title = window.prompt('Enter a title for your project:')
     if (!title) return
 
-    const { data: { user }, error } = await supabase.auth.getUser()
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser()
     if (error || !user) return
 
     const { data: inserted, error: insertError } = await supabase
@@ -415,16 +420,15 @@ export default function DashboardPage() {
     setUserPrompt('')
     setResponse('')
     setCodeGenerated(false)
-    if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
-    prevBlobRef.current = null
+    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
     setStlBlobUrl(null)
-    setViewerVersion(v => v + 1)
     setCurrentProjectId(null)
     setPastStates([])
     setFutureStates([])
     setFeatures([])
     setSelectedFeatureId(null)
-    setPickedSelection(null)
+    setLastScenePick(null)
+    setRenderVersion(v => v + 1)
   }
 
   const handleUpdateProject = async () => {
@@ -458,15 +462,13 @@ export default function DashboardPage() {
     setHistory(project.history ?? [])
     setFeatures([])
     setSelectedFeatureId(null)
-    setPickedSelection(null)
+    setLastScenePick(null)
 
     if (project.response) {
       try {
         const url = await renderStlFromCodeStrict(project.response, resolution)
-        if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
-        prevBlobRef.current = url
         setStlBlobUrl(url)
-        setViewerVersion(v => v + 1) // re-mount viewer on load
+        setRenderVersion(v => v + 1)
       } catch (e) {
         console.error('Error rendering saved project:', e)
         setStlBlobUrl(null)
@@ -494,13 +496,12 @@ export default function DashboardPage() {
       setResponse('')
       setHistory([])
       setCodeGenerated(false)
-      if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current)
-      prevBlobRef.current = null
+      if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
       setStlBlobUrl(null)
-      setViewerVersion(v => v + 1)
       setFeatures([])
       setSelectedFeatureId(null)
-      setPickedSelection(null)
+      setLastScenePick(null)
+      setRenderVersion(v => v + 1)
     }
   }
 
@@ -549,20 +550,20 @@ export default function DashboardPage() {
         )}
 
         {/* Resolution Selector */}
-        <div className={`shadow-md rounded-lg p-4 border transition ${
-          darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
-        }`}>
+        <div
+          className={`shadow-md rounded-lg p-4 border transition ${
+            darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+          }`}
+        >
           <label htmlFor="resolution" className="text-sm font-medium block mb-2">
             Curve Resolution ($fn)
           </label>
           <select
             id="resolution"
             value={resolution}
-            onChange={(e) => setResolution(Number(e.target.value))}
+            onChange={e => setResolution(Number(e.target.value))}
             className={`border px-3 py-2 rounded w-full transition ${
-              darkMode
-                ? 'bg-gray-700 text-white border-gray-600'
-                : 'bg-white text-gray-900 border-gray-500'
+              darkMode ? 'bg-gray-700 text-white border-gray-600' : 'bg-white text-gray-900 border-gray-500'
             }`}
           >
             <option value={10}>10 (Low)</option>
@@ -573,15 +574,17 @@ export default function DashboardPage() {
         </div>
 
         {/* Saved Projects */}
-        <div className={`shadow-md rounded-lg p-4 border transition ${
-          darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
-        }`}>
+        <div
+          className={`shadow-md rounded-lg p-4 border transition ${
+            darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+          }`}
+        >
           <h2 className="text-lg font-semibold mb-3">📁 Saved Projects</h2>
           {projects.length === 0 ? (
             <p className="text-sm text-gray-600 dark:text-gray-300">No saved projects yet.</p>
           ) : (
             <div className="space-y-2">
-              {projects.map((project) => (
+              {projects.map(project => (
                 <div
                   key={project.id}
                   className={`flex justify-between items-center p-3 rounded-lg border transition hover:shadow-md ${
@@ -592,22 +595,13 @@ export default function DashboardPage() {
                 >
                   <span className="truncate">{project.title}</span>
                   <div className="flex gap-3 text-sm font-medium">
-                    <button
-                      onClick={() => handleLoadProject(project.id)}
-                      className="text-green-700 dark:text-green-300 hover:underline"
-                    >
+                    <button onClick={() => handleLoadProject(project.id)} className="text-green-700 dark:text-green-300 hover:underline">
                       Load
                     </button>
-                    <button
-                      onClick={() => handleRename(project.id)}
-                      className="text-blue-700 dark:text-blue-300 hover:underline"
-                    >
+                    <button onClick={() => handleRename(project.id)} className="text-blue-700 dark:text-blue-300 hover:underline">
                       Rename
                     </button>
-                    <button
-                      onClick={() => handleDelete(project.id)}
-                      className="text-red-700 dark:text-red-300 hover:underline"
-                    >
+                    <button onClick={() => handleDelete(project.id)} className="text-red-700 dark:text-red-300 hover:underline">
                       Delete
                     </button>
                   </div>
@@ -618,15 +612,12 @@ export default function DashboardPage() {
         </div>
 
         {/* Chat (HIGH CONTRAST) */}
-        <div className={`shadow-md rounded-lg p-4 border flex flex-col gap-3 transition ${
-          darkMode
-            ? 'bg-gray-900 border-gray-700'
-            : 'bg-white border-gray-400'
-        }`}>
-          <div
-            ref={chatContainerRef}
-            className="max-h-64 overflow-y-auto space-y-2"
-          >
+        <div
+          className={`shadow-md rounded-lg p-4 border flex flex-col gap-3 transition ${
+            darkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-400'
+          }`}
+        >
+          <div ref={chatContainerRef} className="max-h-64 overflow-y-auto space-y-2">
             {history.map((msg, i) => {
               const isUser = msg.role === 'user'
               return (
@@ -634,19 +625,15 @@ export default function DashboardPage() {
                   key={i}
                   className={`p-3 rounded-lg text-sm border ${
                     isUser
-                      ? // USER bubble: strong indigo in both modes
-                        darkMode
+                      ? darkMode
                         ? 'bg-indigo-600 text-white border-indigo-400'
                         : 'bg-indigo-50 text-indigo-900 border-indigo-300'
-                      : // AI bubble: strong neutral contrast in both modes
-                        darkMode
-                        ? 'bg-gray-800 text-gray-100 border-gray-600'
-                        : 'bg-gray-50 text-gray-900 border-gray-300'
+                      : darkMode
+                      ? 'bg-gray-800 text-gray-100 border-gray-600'
+                      : 'bg-gray-50 text-gray-900 border-gray-300'
                   }`}
                 >
-                  <strong className={`${isUser ? '' : ''}`}>
-                    {isUser ? 'You' : 'AI'}:
-                  </strong>{' '}
+                  <strong>{isUser ? 'You' : 'AI'}:</strong>{' '}
                   <span className="whitespace-pre-wrap">{msg.content}</span>
                 </div>
               )
@@ -655,13 +642,11 @@ export default function DashboardPage() {
 
           <textarea
             className={`border px-3 py-2 w-full rounded transition placeholder:opacity-80 ${
-              darkMode
-                ? 'bg-gray-800 text-white border-gray-600 placeholder:text-gray-300'
-                : 'bg-white text-gray-900 border-gray-500 placeholder:text-gray-600'
+              darkMode ? 'bg-gray-800 text-white border-gray-600 placeholder:text-gray-300' : 'bg-white text-gray-900 border-gray-500 placeholder:text-gray-600'
             }`}
             rows={3}
             value={userPrompt}
-            onChange={(e) => setUserPrompt(e.target.value)}
+            onChange={e => setUserPrompt(e.target.value)}
             placeholder="Describe your part or answer the AI's question..."
           />
 
@@ -688,17 +673,11 @@ export default function DashboardPage() {
             >
               Redo
             </button>
-            <button
-              onClick={handleNewProject}
-              className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded font-medium transition"
-            >
+            <button onClick={handleNewProject} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded font-medium transition">
               🆕 New Project
             </button>
             {currentProjectId ? (
-              <button
-                onClick={handleUpdateProject}
-                className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded font-medium transition"
-              >
+              <button onClick={handleUpdateProject} className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded font-medium transition">
                 Save Changes
               </button>
             ) : (
@@ -715,36 +694,35 @@ export default function DashboardPage() {
       </div>
 
       {/* RIGHT PANEL */}
-      <div className={`lg:w-[40%] w-full p-4 shadow-md rounded-lg border space-y-4 transition ${
-        darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-400'
-      }`}>
+      <div
+        className={`lg:w-[40%] w-full p-4 shadow-md rounded-lg border space-y-4 transition ${
+          darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-400'
+        }`}
+      >
         <h2 className="font-bold text-lg">🧱 3D Preview</h2>
         {stlBlobUrl ? (
           <>
             <PartViewer
-              key={`${viewerVersion}:${stlBlobUrl}`}  // ensure fresh mount on every new STL/refresh
-              stlUrl={stlBlobUrl}
-              features={features}
-              onFeatureSelect={(id) => setSelectedFeatureId(id)}
-              // NEW: capture scene picks and turn them into a selection we send to the API
-              onScenePick={({ groupId, point }) => {
-                setPickedSelection({
-                  faceIndex: typeof groupId === 'number' ? groupId : undefined,
-                  point,
-                })
-              }}
-            />
-            <button
-              onClick={handleDownload}
-              className="bg-gray-900 text-white px-4 py-2 rounded hover:bg-black transition font-medium"
-            >
+  key={`${renderVersion}`}
+  stlUrl={stlBlobUrl}
+  features={features}
+  onFeatureSelect={(id) => setSelectedFeatureId(id)}
+  onScenePick={({ groupId, point }) => {
+    // Accept either a tuple or a Vector3 (works with both PartViewer typings)
+    const tuple: [number, number, number] = Array.isArray(point)
+      ? (point as [number, number, number])
+      : ([(point as any).x, (point as any).y, (point as any).z] as [number, number, number])
+
+    setLastScenePick({ groupId, point: tuple })
+  }}
+/>
+
+            <button onClick={handleDownload} className="bg-gray-900 text-white px-4 py-2 rounded hover:bg-black transition font-medium">
               ⬇️ Download STL
             </button>
           </>
         ) : (
-          <div className="text-sm text-gray-700 dark:text-gray-300 italic">
-            Nothing to show yet. Submit a prompt to generate a model.
-          </div>
+          <div className="text-sm text-gray-700 dark:text-gray-300 italic">Nothing to show yet. Submit a prompt to generate a model.</div>
         )}
       </div>
     </div>
