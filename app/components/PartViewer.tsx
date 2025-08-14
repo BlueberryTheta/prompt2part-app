@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useRef, useState, useEffect, useMemo } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
+import { Canvas, useFrame, invalidate } from '@react-three/fiber'
 import { OrbitControls, Html } from '@react-three/drei'
 import { STLLoader } from 'three-stdlib'
 import * as THREE from 'three'
@@ -23,7 +23,7 @@ type PartViewerProps = {
   /** Called when user selects a feature from the list or the scene (feature list click) */
   onFeatureSelect?: (featureId: string | null) => void
   /** Called when the user clicks a planar face in the scene (groupId + 3D point) */
-  onScenePick?: (args: { groupId: number; point: [number, number, number] }) => void
+  onScenePick?: (args: { groupId: number; point: THREE.Vector3 }) => void
 }
 
 /** ---------- helpers ---------- **/
@@ -227,26 +227,61 @@ function STLModel({
   const [hoverGid, setHoverGid] = useState<number | null>(null)
   const [hoverPoint, setHoverPoint] = useState<THREE.Vector3 | null>(null)
 
-  // Load STL with no-store to avoid caching + clean up geometry on unmount
+  // Derived, cache-busted URL for networked STLs (blob: URLs are already unique)
+  const [localUrl, setLocalUrl] = useState<string>(stlUrl)
+  const [reloadKey, setReloadKey] = useState<number>(0) // forces mesh remount
+
   useEffect(() => {
-    if (!stlUrl) return
+    // Clear existing geometry immediately so the canvas shows a "refresh" between updates
+    setGeometry(null)
+    setFaceToGroup(null)
+    setGroups([])
+    setHoverGid(null)
+    setHoverPoint(null)
+    // Build a cache-busted URL for non-blob sources
+    if (stlUrl && !stlUrl.startsWith('blob:')) {
+      const sep = stlUrl.includes('?') ? '&' : '?'
+      setLocalUrl(`${stlUrl}${sep}t=${Date.now()}`)
+    } else {
+      setLocalUrl(stlUrl)
+    }
+    // bump reload key to guarantee mesh remount
+    setReloadKey(k => k + 1)
+  }, [stlUrl])
+
+  // Load STL with no-store + abort + dispose
+  useEffect(() => {
+    if (!localUrl) return
     const ac = new AbortController()
     let alive = true
 
     ;(async () => {
       try {
-        const res = await fetch(stlUrl, { signal: ac.signal, cache: 'no-store' })
+        const res = await fetch(localUrl, {
+          signal: ac.signal,
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' },
+        })
         const buf = await res.arrayBuffer()
         if (!alive) return
         const loader = new STLLoader()
         const geom = loader.parse(buf)
         geom.computeVertexNormals()
+        // flag geometry as updated
+        geom.attributes.position.needsUpdate = true
+        if ((geom as any).attributes?.normal) {
+          ;(geom as any).attributes.normal.needsUpdate = true
+        }
         if (!alive) return
+
         setGeometry(geom)
         const { faceToGroup: map, groups } = buildPlanarGroups(geom)
         if (!alive) return
         setFaceToGroup(map)
         setGroups(groups)
+
+        // force canvas to render now
+        invalidate()
       } catch (e: any) {
         if (e?.name !== 'AbortError') console.error('Failed to load STL:', e)
       }
@@ -255,14 +290,14 @@ function STLModel({
     return () => {
       alive = false
       ac.abort()
-      // dispose geometry/materials on unmount
+      // dispose old geometry/material to free GPU memory
       if (meshRef.current) {
         meshRef.current.geometry?.dispose()
         // @ts-ignore
         meshRef.current.material?.dispose?.()
       }
     }
-  }, [stlUrl])
+  }, [localUrl])
 
   // Apply external selection (feature click) as a persistent highlight
   useEffect(() => {
@@ -274,6 +309,7 @@ function STLModel({
       if (g) setHoverPoint(g.label.clone())
     }
     setHoverGid(selectedGroupId)
+    invalidate()
   }, [selectedGroupId, selectedPoint, groups])
 
   useFrame(() => {
@@ -308,6 +344,7 @@ function STLModel({
       <OrientationLabels geometry={geometry} />
 
       <mesh
+        key={reloadKey} // <— hard remounts on each STL change
         ref={meshRef}
         geometry={geometry}
         material={useHover ? hoverMaterial : baseMaterial}
@@ -328,6 +365,10 @@ function STLModel({
           if (faceToGroup == null || e.faceIndex == null) return
           const gid = faceToGroup[e.faceIndex]
           if (gid >= 0) onGroupPick({ point: e.point.clone(), groupId: gid })
+        }}
+        onUpdate={() => {
+          // ensure we render when the mesh (re)mounts
+          invalidate()
         }}
       />
 
@@ -384,8 +425,7 @@ export default function PartViewer({
     setPicked({ point, groupId })
     setSelectedFeatureId(null)
     onFeatureSelect?.(null)
-    // >>> changed: send tuple, not Vector3
-    onScenePick?.({ groupId, point: [point.x, point.y, point.z] })
+    onScenePick?.({ groupId, point })
   }
 
   // Feature list click -> local selection + callback
@@ -430,7 +470,7 @@ export default function PartViewer({
           <directionalLight position={[50, 50, 50]} intensity={0.7} />
           <OrbitControls enablePan enableZoom enableRotate />
           <STLModel
-            key={stlUrl} // force remount on each new STL
+            key={stlUrl} // still helpful if your parent swaps blob URLs
             stlUrl={stlUrl}
             autoRotate={autoRotate}
             onGroupPick={handleScenePick}

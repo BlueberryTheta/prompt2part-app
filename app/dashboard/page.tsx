@@ -710,7 +710,7 @@ export default function DashboardPage() {
   onScenePick={({ groupId, point }) => {
     // Accept either a tuple or a Vector3 (works with both PartViewer typings)
     const tuple: [number, number, number] = Array.isArray(point)
-      ? (point as [number, number, number])
+      ? (point as unknown as [number, number, number])
       : ([(point as any).x, (point as any).y, (point as any).z] as [number, number, number])
 
     setLastScenePick({ groupId, point: tuple })
