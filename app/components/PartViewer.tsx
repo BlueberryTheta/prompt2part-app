@@ -226,9 +226,9 @@ function STLModel({
   const [groups, setGroups] = useState<Array<{ id: number; tris: number[]; label: THREE.Vector3 }>>([])
   const [hoverGid, setHoverGid] = useState<number | null>(null)
   const [hoverPoint, setHoverPoint] = useState<THREE.Vector3 | null>(null)
-  const { invalidate } = useThree() // 👈 force a render when we load
+  const { invalidate } = useThree() // force render when we load/update
 
-  // Load STL with no-store to avoid caching + clean up geometry on unmount
+  // Load STL (avoid cache-busting for blob: URLs)
   useEffect(() => {
     if (!stlUrl) return
     const ac = new AbortController()
@@ -236,16 +236,24 @@ function STLModel({
 
     ;(async () => {
       try {
-        // Extra defensive: add a cache-busting search param (even for blob: this is no-op but harmless)
-        const urlToFetch = stlUrl.includes('?') ? `${stlUrl}&t=${Date.now()}` : `${stlUrl}?t=${Date.now()}`
-        const res = await fetch(urlToFetch, { signal: ac.signal, cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } })
+        const isBlob = stlUrl.startsWith('blob:')
+        const urlToFetch = isBlob ? stlUrl : (stlUrl.includes('?') ? `${stlUrl}&t=${Date.now()}` : `${stlUrl}?t=${Date.now()}`)
+
+        const res = await fetch(urlToFetch, {
+          signal: ac.signal,
+          cache: isBlob ? 'no-store' : 'reload',
+          headers: isBlob ? {} : { 'Cache-Control': 'no-cache' },
+        })
+        if (!res.ok) throw new Error(`STL fetch failed: ${res.status}`)
+
         const buf = await res.arrayBuffer()
         if (!alive) return
+
         const loader = new STLLoader()
         const geom = loader.parse(buf)
         geom.computeVertexNormals()
 
-        // Dispose old geometry to prevent reuse & ensure new buffers are bound
+        // Dispose old geometry to prevent reuse
         if (meshRef.current?.geometry) {
           try { meshRef.current.geometry.dispose() } catch {}
         }
@@ -253,15 +261,14 @@ function STLModel({
         if (!alive) return
         setGeometry(geom)
 
-        // Rebuild planar groups for labels/selection
+        // Planar groups for labeling/selection
         const { faceToGroup: map, groups } = buildPlanarGroups(geom)
         if (!alive) return
         setFaceToGroup(map)
         setGroups(groups)
 
-        // Ensure we repaint immediately (sometimes fiber skips if nothing animates)
+        // Make sure the new mesh appears immediately
         requestAnimationFrame(() => invalidate())
-        // A second invalidate helps some throttled tabs/environments
         setTimeout(() => invalidate(), 16)
       } catch (e: any) {
         if (e?.name !== 'AbortError') console.error('Failed to load STL:', e)
@@ -284,7 +291,6 @@ function STLModel({
       if (g) setHoverPoint(g.label.clone())
     }
     setHoverGid(selectedGroupId)
-    // make sure this selection shows up immediately
     requestAnimationFrame(() => invalidate())
   }, [selectedGroupId, selectedPoint, groups, invalidate])
 
@@ -313,7 +319,6 @@ function STLModel({
     []
   )
 
-  // If we’re in a “selected/hover” state, flip material so the change is visible
   const useHover = hoverGid !== null
 
   return geometry ? (
@@ -342,7 +347,6 @@ function STLModel({
           const gid = faceToGroup[e.faceIndex]
           if (gid >= 0) {
             onGroupPick({ point: e.point.clone(), groupId: gid })
-            // make sure the click feedback repaints
             requestAnimationFrame(() => invalidate())
           }
         }}
@@ -396,7 +400,7 @@ export default function PartViewer({
     return new THREE.Vector3(x, y, z)
   }, [selectedFeature])
 
-  // Scene pick -> bubble up (for your dashboard to map/record), also clear feature list selection
+  // Scene pick -> bubble up, clear list selection
   const handleScenePick = ({ point, groupId }: { point: THREE.Vector3; groupId: number }) => {
     setPicked({ point, groupId })
     setSelectedFeatureId(null)
