@@ -41,6 +41,11 @@ export default function DashboardPage() {
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const router = useRouter()
 
+  // --- render race guards ---
+  const renderSeqRef = useRef(0)            // monotonically increasing render "ticket"
+  const latestAppliedRef = useRef(0)        // last applied ticket
+  const currentBlobUrlRef = useRef<string | null>(null) // track current object URL
+
   // === Undo / Redo ===
   type ModelSnapshot = {
     history: ChatMsg[]
@@ -138,15 +143,25 @@ export default function DashboardPage() {
     return { message, code }
   }
 
-  async function renderStlFromCodeStrict(code: string, res: number): Promise<string> {
+  /**
+   * Race-proof render:
+   * - Allocate a ticket for this render.
+   * - Fetch with no-store + no-cache.
+   * - Only apply if this ticket is still the latest when the response arrives.
+   * - Revoke old blob URLs to avoid leaks & stale displays.
+   * - Bump renderVersion only when *applying*.
+   */
+  async function renderStlFromCodeStrict(code: string, res: number): Promise<{ url: string; applied: boolean }> {
+    const mySeq = ++renderSeqRef.current
+
     const formData = new FormData()
-    // prepend $fn for curve resolution
     formData.append('code', `$fn = ${res};\n` + code)
 
     const backendRes = await fetch(RENDER_URL, {
       method: 'POST',
       body: formData,
       cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
     })
 
     const cloneText = await backendRes.clone().text()
@@ -162,9 +177,26 @@ export default function DashboardPage() {
     const blob = await backendRes.blob()
     if (!blob || blob.size === 0) throw new Error('Empty STL blob received.')
 
-    // revoke previous to ensure viewer refresh & no leaks
-    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
-    return URL.createObjectURL(blob)
+    const url = URL.createObjectURL(blob)
+
+    // Only apply if this is the latest render
+    if (mySeq >= latestAppliedRef.current) {
+      // Revoke previous
+      if (currentBlobUrlRef.current) {
+        try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
+      }
+      currentBlobUrlRef.current = url
+      latestAppliedRef.current = mySeq
+
+      setStlBlobUrl(url)
+      setRenderVersion(v => v + 1)
+
+      return { url, applied: true }
+    } else {
+      // Stale; revoke and ignore
+      try { URL.revokeObjectURL(url) } catch {}
+      return { url, applied: false }
+    }
   }
 
   // Auto-scroll chat
@@ -214,15 +246,20 @@ export default function DashboardPage() {
 
     if (snapshot.response) {
       try {
-        const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
-        setStlBlobUrl(url)
-        setRenderVersion(v => v + 1)
+        await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
       } catch (e) {
         console.error('Undo render error:', e)
         setStlBlobUrl(null)
       }
     } else {
+      // Clear & invalidate any in-flight results
+      if (currentBlobUrlRef.current) {
+        try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
+        currentBlobUrlRef.current = null
+      }
+      latestAppliedRef.current = renderSeqRef.current
       setStlBlobUrl(null)
+      setRenderVersion(v => v + 1)
     }
   }
 
@@ -246,15 +283,19 @@ export default function DashboardPage() {
 
     if (snapshot.response) {
       try {
-        const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
-        setStlBlobUrl(url)
-        setRenderVersion(v => v + 1)
+        await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
       } catch (e) {
         console.error('Redo render error:', e)
         setStlBlobUrl(null)
       }
     } else {
+      if (currentBlobUrlRef.current) {
+        try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
+        currentBlobUrlRef.current = null
+      }
+      latestAppliedRef.current = renderSeqRef.current
       setStlBlobUrl(null)
+      setRenderVersion(v => v + 1)
     }
   }
 
@@ -276,7 +317,7 @@ export default function DashboardPage() {
 
       // Carry over group hint if present (e.g., base_face: "G1")
       let groupId: number | undefined = undefined
-      const baseFace = f?.base_face || f?.face || f?.faceIndex
+      const baseFace = (f?.base_face ?? f?.face ?? f?.faceIndex) as any
       if (typeof baseFace === 'string' && /^G\d+$/.test(baseFace)) {
         groupId = parseInt(baseFace.slice(1), 10)
       }
@@ -348,11 +389,13 @@ export default function DashboardPage() {
         setResponse(code)
         setCodeGenerated(true)
 
-        // Render STL
+        // Render STL (race-proof)
         try {
-          const url = await renderStlFromCodeStrict(code, resolution)
-          setStlBlobUrl(url)
-          setRenderVersion(v => v + 1) // key bump to force Canvas remount
+          const { applied } = await renderStlFromCodeStrict(code, resolution)
+          if (!applied) {
+            // A newer render won; ignore silently or log if needed
+            // console.debug('Skipped applying stale render result')
+          }
         } catch (e: any) {
           console.error('Render error:', e)
         }
@@ -420,8 +463,15 @@ export default function DashboardPage() {
     setUserPrompt('')
     setResponse('')
     setCodeGenerated(false)
-    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+
+    // Revoke and invalidate any current/late renders
+    if (currentBlobUrlRef.current) {
+      try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
+      currentBlobUrlRef.current = null
+    }
+    latestAppliedRef.current = renderSeqRef.current
     setStlBlobUrl(null)
+
     setCurrentProjectId(null)
     setPastStates([])
     setFutureStates([])
@@ -466,15 +516,26 @@ export default function DashboardPage() {
 
     if (project.response) {
       try {
-        const url = await renderStlFromCodeStrict(project.response, resolution)
-        setStlBlobUrl(url)
-        setRenderVersion(v => v + 1)
+        await renderStlFromCodeStrict(project.response, resolution)
       } catch (e) {
         console.error('Error rendering saved project:', e)
+        // Revoke and invalidate if needed
+        if (currentBlobUrlRef.current) {
+          try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
+          currentBlobUrlRef.current = null
+        }
+        latestAppliedRef.current = renderSeqRef.current
         setStlBlobUrl(null)
+        setRenderVersion(v => v + 1)
       }
     } else {
+      if (currentBlobUrlRef.current) {
+        try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
+        currentBlobUrlRef.current = null
+      }
+      latestAppliedRef.current = renderSeqRef.current
       setStlBlobUrl(null)
+      setRenderVersion(v => v + 1)
     }
   }
 
@@ -496,8 +557,14 @@ export default function DashboardPage() {
       setResponse('')
       setHistory([])
       setCodeGenerated(false)
-      if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+
+      if (currentBlobUrlRef.current) {
+        try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
+        currentBlobUrlRef.current = null
+      }
+      latestAppliedRef.current = renderSeqRef.current
       setStlBlobUrl(null)
+
       setFeatures([])
       setSelectedFeatureId(null)
       setLastScenePick(null)
@@ -703,19 +770,19 @@ export default function DashboardPage() {
         {stlBlobUrl ? (
           <>
             <PartViewer
-  key={`${renderVersion}`}
-  stlUrl={stlBlobUrl}
-  features={features}
-  onFeatureSelect={(id) => setSelectedFeatureId(id)}
-  onScenePick={({ groupId, point }) => {
-    // Accept either a tuple or a Vector3 (works with both PartViewer typings)
-    const tuple: [number, number, number] = Array.isArray(point)
-      ? (point as unknown as [number, number, number])
-      : ([(point as any).x, (point as any).y, (point as any).z] as [number, number, number])
+              key={`${renderVersion}`} // remount on applied renders
+              stlUrl={stlBlobUrl}
+              features={features}
+              onFeatureSelect={(id) => setSelectedFeatureId(id)}
+              onScenePick={({ groupId, point }) => {
+                // Accept either a tuple or a Vector3 (works with both PartViewer typings)
+                const tuple: [number, number, number] = Array.isArray(point)
+                  ? (point as unknown as [number, number, number])
+                  : ([(point as any).x, (point as any).y, (point as any).z] as [number, number, number])
 
-    setLastScenePick({ groupId, point: tuple })
-  }}
-/>
+                setLastScenePick({ groupId, point: tuple })
+              }}
+            />
 
             <button onClick={handleDownload} className="bg-gray-900 text-white px-4 py-2 rounded hover:bg-black transition font-medium">
               ⬇️ Download STL
