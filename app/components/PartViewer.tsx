@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useRef, useState, useEffect, useMemo } from 'react'
-import { Canvas, useFrame, invalidate } from '@react-three/fiber'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls, Html } from '@react-three/drei'
 import { STLLoader } from 'three-stdlib'
 import * as THREE from 'three'
@@ -226,62 +226,43 @@ function STLModel({
   const [groups, setGroups] = useState<Array<{ id: number; tris: number[]; label: THREE.Vector3 }>>([])
   const [hoverGid, setHoverGid] = useState<number | null>(null)
   const [hoverPoint, setHoverPoint] = useState<THREE.Vector3 | null>(null)
+  const { invalidate } = useThree() // 👈 force a render when we load
 
-  // Derived, cache-busted URL for networked STLs (blob: URLs are already unique)
-  const [localUrl, setLocalUrl] = useState<string>(stlUrl)
-  const [reloadKey, setReloadKey] = useState<number>(0) // forces mesh remount
-
+  // Load STL with no-store to avoid caching + clean up geometry on unmount
   useEffect(() => {
-    // Clear existing geometry immediately so the canvas shows a "refresh" between updates
-    setGeometry(null)
-    setFaceToGroup(null)
-    setGroups([])
-    setHoverGid(null)
-    setHoverPoint(null)
-    // Build a cache-busted URL for non-blob sources
-    if (stlUrl && !stlUrl.startsWith('blob:')) {
-      const sep = stlUrl.includes('?') ? '&' : '?'
-      setLocalUrl(`${stlUrl}${sep}t=${Date.now()}`)
-    } else {
-      setLocalUrl(stlUrl)
-    }
-    // bump reload key to guarantee mesh remount
-    setReloadKey(k => k + 1)
-  }, [stlUrl])
-
-  // Load STL with no-store + abort + dispose
-  useEffect(() => {
-    if (!localUrl) return
+    if (!stlUrl) return
     const ac = new AbortController()
     let alive = true
 
     ;(async () => {
       try {
-        const res = await fetch(localUrl, {
-          signal: ac.signal,
-          cache: 'no-store',
-          headers: { 'Cache-Control': 'no-cache' },
-        })
+        // Extra defensive: add a cache-busting search param (even for blob: this is no-op but harmless)
+        const urlToFetch = stlUrl.includes('?') ? `${stlUrl}&t=${Date.now()}` : `${stlUrl}?t=${Date.now()}`
+        const res = await fetch(urlToFetch, { signal: ac.signal, cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } })
         const buf = await res.arrayBuffer()
         if (!alive) return
         const loader = new STLLoader()
         const geom = loader.parse(buf)
         geom.computeVertexNormals()
-        // flag geometry as updated
-        geom.attributes.position.needsUpdate = true
-        if ((geom as any).attributes?.normal) {
-          ;(geom as any).attributes.normal.needsUpdate = true
-        }
-        if (!alive) return
 
+        // Dispose old geometry to prevent reuse & ensure new buffers are bound
+        if (meshRef.current?.geometry) {
+          try { meshRef.current.geometry.dispose() } catch {}
+        }
+
+        if (!alive) return
         setGeometry(geom)
+
+        // Rebuild planar groups for labels/selection
         const { faceToGroup: map, groups } = buildPlanarGroups(geom)
         if (!alive) return
         setFaceToGroup(map)
         setGroups(groups)
 
-        // force canvas to render now
-        invalidate()
+        // Ensure we repaint immediately (sometimes fiber skips if nothing animates)
+        requestAnimationFrame(() => invalidate())
+        // A second invalidate helps some throttled tabs/environments
+        setTimeout(() => invalidate(), 16)
       } catch (e: any) {
         if (e?.name !== 'AbortError') console.error('Failed to load STL:', e)
       }
@@ -290,14 +271,8 @@ function STLModel({
     return () => {
       alive = false
       ac.abort()
-      // dispose old geometry/material to free GPU memory
-      if (meshRef.current) {
-        meshRef.current.geometry?.dispose()
-        // @ts-ignore
-        meshRef.current.material?.dispose?.()
-      }
     }
-  }, [localUrl])
+  }, [stlUrl, invalidate])
 
   // Apply external selection (feature click) as a persistent highlight
   useEffect(() => {
@@ -309,8 +284,9 @@ function STLModel({
       if (g) setHoverPoint(g.label.clone())
     }
     setHoverGid(selectedGroupId)
-    invalidate()
-  }, [selectedGroupId, selectedPoint, groups])
+    // make sure this selection shows up immediately
+    requestAnimationFrame(() => invalidate())
+  }, [selectedGroupId, selectedPoint, groups, invalidate])
 
   useFrame(() => {
     if (autoRotate && meshRef.current) {
@@ -337,6 +313,7 @@ function STLModel({
     []
   )
 
+  // If we’re in a “selected/hover” state, flip material so the change is visible
   const useHover = hoverGid !== null
 
   return geometry ? (
@@ -344,7 +321,6 @@ function STLModel({
       <OrientationLabels geometry={geometry} />
 
       <mesh
-        key={reloadKey} // <— hard remounts on each STL change
         ref={meshRef}
         geometry={geometry}
         material={useHover ? hoverMaterial : baseMaterial}
@@ -364,11 +340,11 @@ function STLModel({
           e.stopPropagation()
           if (faceToGroup == null || e.faceIndex == null) return
           const gid = faceToGroup[e.faceIndex]
-          if (gid >= 0) onGroupPick({ point: e.point.clone(), groupId: gid })
-        }}
-        onUpdate={() => {
-          // ensure we render when the mesh (re)mounts
-          invalidate()
+          if (gid >= 0) {
+            onGroupPick({ point: e.point.clone(), groupId: gid })
+            // make sure the click feedback repaints
+            requestAnimationFrame(() => invalidate())
+          }
         }}
       />
 
@@ -465,12 +441,12 @@ export default function PartViewer({
 
       {/* Canvas */}
       <div className="w-full h-[400px]">
-        <Canvas camera={{ position: [70, 70, 70], near: 0.1, far: 2000 }}>
+        <Canvas camera={{ position: [70, 70, 70], near: 0.1, far: 2000 }} dpr={[1, 2]}>
           <ambientLight intensity={0.8} />
           <directionalLight position={[50, 50, 50]} intensity={0.7} />
           <OrbitControls enablePan enableZoom enableRotate />
           <STLModel
-            key={stlUrl} // still helpful if your parent swaps blob URLs
+            key={stlUrl} // force remount on each new STL
             stlUrl={stlUrl}
             autoRotate={autoRotate}
             onGroupPick={handleScenePick}
