@@ -479,6 +479,9 @@ export default function DashboardPage() {
     setSelectedFeatureId(null)
     setLastScenePick(null)
     setRenderVersion(v => v + 1)
+
+    setSpec({ units: 'mm' })      // NEW: critical — start with a fresh spec so the API can’t merge old features
+    setAssumptions([])            // NEW: clear any previous defaults list
   }
 
   const handleUpdateProject = async () => {
@@ -513,6 +516,9 @@ export default function DashboardPage() {
     setFeatures([])
     setSelectedFeatureId(null)
     setLastScenePick(null)
+
+    setSpec({ units: 'mm' })  // NEW: wipe stale spec so next API call doesn’t merge old features
+    setAssumptions([])        // NEW
 
     if (project.response) {
       try {
