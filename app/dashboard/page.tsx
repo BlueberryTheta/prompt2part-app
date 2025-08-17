@@ -38,13 +38,11 @@ export default function DashboardPage() {
   // Last scene pick (to send to backend as selection)
   const [lastScenePick, setLastScenePick] = useState<{ groupId: number; point: [number, number, number] } | null>(null)
 
+  // 🚦 Race guard: only the latest request may update model state
+  const requestSeqRef = useRef(0)
+
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const router = useRouter()
-
-  // --- render race guards ---
-  const renderSeqRef = useRef(0)            // monotonically increasing render "ticket"
-  const latestAppliedRef = useRef(0)        // last applied ticket
-  const currentBlobUrlRef = useRef<string | null>(null) // track current object URL
 
   // === Undo / Redo ===
   type ModelSnapshot = {
@@ -143,25 +141,15 @@ export default function DashboardPage() {
     return { message, code }
   }
 
-  /**
-   * Race-proof render:
-   * - Allocate a ticket for this render.
-   * - Fetch with no-store + no-cache.
-   * - Only apply if this ticket is still the latest when the response arrives.
-   * - Revoke old blob URLs to avoid leaks & stale displays.
-   * - Bump renderVersion only when *applying*.
-   */
-  async function renderStlFromCodeStrict(code: string, res: number): Promise<{ url: string; applied: boolean }> {
-    const mySeq = ++renderSeqRef.current
-
+  async function renderStlFromCodeStrict(code: string, res: number): Promise<string> {
     const formData = new FormData()
+    // prepend $fn for curve resolution
     formData.append('code', `$fn = ${res};\n` + code)
 
     const backendRes = await fetch(RENDER_URL, {
       method: 'POST',
       body: formData,
       cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache' },
     })
 
     const cloneText = await backendRes.clone().text()
@@ -177,26 +165,9 @@ export default function DashboardPage() {
     const blob = await backendRes.blob()
     if (!blob || blob.size === 0) throw new Error('Empty STL blob received.')
 
-    const url = URL.createObjectURL(blob)
-
-    // Only apply if this is the latest render
-    if (mySeq >= latestAppliedRef.current) {
-      // Revoke previous
-      if (currentBlobUrlRef.current) {
-        try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
-      }
-      currentBlobUrlRef.current = url
-      latestAppliedRef.current = mySeq
-
-      setStlBlobUrl(url)
-      setRenderVersion(v => v + 1)
-
-      return { url, applied: true }
-    } else {
-      // Stale; revoke and ignore
-      try { URL.revokeObjectURL(url) } catch {}
-      return { url, applied: false }
-    }
+    // revoke previous to ensure viewer refresh & no leaks
+    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+    return URL.createObjectURL(blob)
   }
 
   // Auto-scroll chat
@@ -246,20 +217,15 @@ export default function DashboardPage() {
 
     if (snapshot.response) {
       try {
-        await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
+        const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
+        setStlBlobUrl(url)
+        setRenderVersion(v => v + 1)
       } catch (e) {
         console.error('Undo render error:', e)
         setStlBlobUrl(null)
       }
     } else {
-      // Clear & invalidate any in-flight results
-      if (currentBlobUrlRef.current) {
-        try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
-        currentBlobUrlRef.current = null
-      }
-      latestAppliedRef.current = renderSeqRef.current
       setStlBlobUrl(null)
-      setRenderVersion(v => v + 1)
     }
   }
 
@@ -283,19 +249,15 @@ export default function DashboardPage() {
 
     if (snapshot.response) {
       try {
-        await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
+        const url = await renderStlFromCodeStrict(snapshot.response, snapshot.resolution)
+        setStlBlobUrl(url)
+        setRenderVersion(v => v + 1)
       } catch (e) {
         console.error('Redo render error:', e)
         setStlBlobUrl(null)
       }
     } else {
-      if (currentBlobUrlRef.current) {
-        try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
-        currentBlobUrlRef.current = null
-      }
-      latestAppliedRef.current = renderSeqRef.current
       setStlBlobUrl(null)
-      setRenderVersion(v => v + 1)
     }
   }
 
@@ -304,10 +266,29 @@ export default function DashboardPage() {
     const list = (spec?.features || []) as any[]
     if (!Array.isArray(list) || list.length === 0) return []
 
+    // Filter out ambiguous/unrenderable placeholders so the tree only shows “real” things
+    const filtered = list.filter((f) => {
+      const t = (f?.type || '').toString().toLowerCase()
+      if (t === 'cube') {
+        return Number.isFinite(f?.side_length)
+      }
+      if (t === 'cylinder') {
+        const okDims = Number.isFinite(f?.diameter) && Number.isFinite(f?.height)
+        if (!okDims) return false
+        // If it claims adjacency, require a concrete reference face
+        if (f?.position?.alignment === 'adjacent') {
+          return typeof f?.position?.reference_face === 'string' && /^G\d+$/.test(f.position.reference_face)
+        }
+        return true
+      }
+      // Default: allow only if not obviously incomplete
+      return true
+    })
+
     const typeCounts = new Map<string, number>()
     const out: Feature[] = []
 
-    for (const f of list) {
+    for (const f of filtered) {
       const t = (f?.type || 'feature').toString().toLowerCase()
       const next = (typeCounts.get(t) || 0) + 1
       typeCounts.set(t, next)
@@ -315,9 +296,9 @@ export default function DashboardPage() {
       const prettyType = t.charAt(0).toUpperCase() + t.slice(1)
       const id = `${t}-${next}`
 
-      // Carry over group hint if present (e.g., base_face: "G1")
+      // Carry over group hint if present (e.g., base_face: "G1" or position.reference_face)
       let groupId: number | undefined = undefined
-      const baseFace = (f?.base_face ?? f?.face ?? f?.faceIndex) as any
+      const baseFace = f?.base_face || f?.face || f?.faceIndex || f?.position?.reference_face
       if (typeof baseFace === 'string' && /^G\d+$/.test(baseFace)) {
         groupId = parseInt(baseFace.slice(1), 10)
       }
@@ -353,6 +334,9 @@ export default function DashboardPage() {
 
     const baseHistory: ChatMsg[] = [...history, { role: 'user', content: userPrompt }]
 
+    // Start a fresh request; invalidate older async work
+    const myReqId = ++requestSeqRef.current
+
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
@@ -371,42 +355,56 @@ export default function DashboardPage() {
         cache: 'no-store',
       })
       const data = await res.json()
+      if (myReqId !== requestSeqRef.current) return // stale
 
       // Always show assistant_text
       const assistantText = data?.assistant_text || 'Okay.'
       setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
-
-      // Always update spec if provided
-      if (data?.spec) {
-        setSpec(data.spec as Spec)
-        // Keep the feature tree in sync with what the model says it added/changed
-        mergeFeaturesFromSpec(data.spec as Spec)
-      }
       setAssumptions(data?.assumptions || [])
 
+      // Only proceed to STL + features when we actually have code
       if (data?.type === 'code' && data?.code) {
         const code = data.code as string
         setResponse(code)
         setCodeGenerated(true)
 
-        // Render STL (race-proof)
+        // Render STL
         try {
-          const { applied } = await renderStlFromCodeStrict(code, resolution)
-          if (!applied) {
-            // A newer render won; ignore silently or log if needed
-            // console.debug('Skipped applying stale render result')
+          const url = await renderStlFromCodeStrict(code, resolution)
+          if (myReqId !== requestSeqRef.current) return // stale
+          setStlBlobUrl(url)
+          setRenderVersion(v => v + 1) // key bump to force Canvas remount
+
+          // ✅ Update spec + features only after render succeeded
+          if (data?.spec) {
+            setSpec(data.spec as Spec)
+            mergeFeaturesFromSpec(data.spec as Spec)
           }
         } catch (e: any) {
+          if (myReqId !== requestSeqRef.current) return // stale
           console.error('Render error:', e)
+          setHistory(h => [
+            ...h,
+            {
+              role: 'assistant',
+              content:
+                '⚠️ I generated code, but the render failed. Please clarify the request or try again (e.g., specify the face or dimensions more precisely).',
+            },
+          ])
+          // leave current STL & features untouched
         }
+      } else {
+        // type === 'questions' or anything without code:
+        // ❌ Do not touch spec/features here to avoid the tree getting ahead of the render
       }
 
       setUserPrompt('')
     } catch (err) {
+      if (myReqId !== requestSeqRef.current) return // stale
       console.error('Client submit error:', err)
       setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
     } finally {
-      setLoading(false)
+      if (myReqId === requestSeqRef.current) setLoading(false)
     }
   }
 
@@ -459,29 +457,23 @@ export default function DashboardPage() {
     const proceed = confirm('⚠️ This will clear your current work. Make sure to save before starting a new project. Continue?')
     if (!proceed) return
 
+    // Invalidate any in-flight requests so their responses can’t touch new state
+    requestSeqRef.current++
+
     setHistory([])
     setUserPrompt('')
     setResponse('')
     setCodeGenerated(false)
-
-    // Revoke and invalidate any current/late renders
-    if (currentBlobUrlRef.current) {
-      try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
-      currentBlobUrlRef.current = null
-    }
-    latestAppliedRef.current = renderSeqRef.current
+    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
     setStlBlobUrl(null)
-
     setCurrentProjectId(null)
     setPastStates([])
     setFutureStates([])
     setFeatures([])
     setSelectedFeatureId(null)
     setLastScenePick(null)
+    setSpec({ units: 'mm' }) // also clear spec so next prompt starts fresh
     setRenderVersion(v => v + 1)
-
-    setSpec({ units: 'mm' })      // NEW: critical — start with a fresh spec so the API can’t merge old features
-    setAssumptions([])            // NEW: clear any previous defaults list
   }
 
   const handleUpdateProject = async () => {
@@ -508,6 +500,9 @@ export default function DashboardPage() {
 
     takeSnapshot()
 
+    // Invalidate any in-flight requests so they can’t overwrite this load
+    requestSeqRef.current++
+
     setCurrentProjectId(projectId)
     setUserPrompt(project.prompt || '')
     setResponse(project.response || '')
@@ -517,31 +512,17 @@ export default function DashboardPage() {
     setSelectedFeatureId(null)
     setLastScenePick(null)
 
-    setSpec({ units: 'mm' })  // NEW: wipe stale spec so next API call doesn’t merge old features
-    setAssumptions([])        // NEW
-
     if (project.response) {
       try {
-        await renderStlFromCodeStrict(project.response, resolution)
+        const url = await renderStlFromCodeStrict(project.response, resolution)
+        setStlBlobUrl(url)
+        setRenderVersion(v => v + 1)
       } catch (e) {
         console.error('Error rendering saved project:', e)
-        // Revoke and invalidate if needed
-        if (currentBlobUrlRef.current) {
-          try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
-          currentBlobUrlRef.current = null
-        }
-        latestAppliedRef.current = renderSeqRef.current
         setStlBlobUrl(null)
-        setRenderVersion(v => v + 1)
       }
     } else {
-      if (currentBlobUrlRef.current) {
-        try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
-        currentBlobUrlRef.current = null
-      }
-      latestAppliedRef.current = renderSeqRef.current
       setStlBlobUrl(null)
-      setRenderVersion(v => v + 1)
     }
   }
 
@@ -558,22 +539,20 @@ export default function DashboardPage() {
     await supabase.from('projects').delete().eq('id', projectId)
     setProjects(prev => prev.filter(p => p.id !== projectId))
     if (currentProjectId === projectId) {
+      // Invalidate any in-flight requests for the just-deleted project
+      requestSeqRef.current++
+
       setCurrentProjectId(null)
       setUserPrompt('')
       setResponse('')
       setHistory([])
       setCodeGenerated(false)
-
-      if (currentBlobUrlRef.current) {
-        try { URL.revokeObjectURL(currentBlobUrlRef.current) } catch {}
-        currentBlobUrlRef.current = null
-      }
-      latestAppliedRef.current = renderSeqRef.current
+      if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
       setStlBlobUrl(null)
-
       setFeatures([])
       setSelectedFeatureId(null)
       setLastScenePick(null)
+      setSpec({ units: 'mm' })
       setRenderVersion(v => v + 1)
     }
   }
@@ -660,11 +639,12 @@ export default function DashboardPage() {
               {projects.map(project => (
                 <div
                   key={project.id}
-                  className={`flex justify-between items-center p-3 rounded-lg border transition hover:shadow-md ${
+                  className={`flex justify_between items-center p-3 rounded-lg border transition hover:shadow-md ${
                     darkMode
                       ? 'bg-gray-750 bg-gray-700 border-gray-600 hover:bg-gray-650 hover:bg-gray-600'
                       : 'bg-gray-50 border-gray-400 hover:bg-gray-200'
                   }`}
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                 >
                   <span className="truncate">{project.title}</span>
                   <div className="flex gap-3 text-sm font-medium">
@@ -776,7 +756,7 @@ export default function DashboardPage() {
         {stlBlobUrl ? (
           <>
             <PartViewer
-              key={`${renderVersion}`} // remount on applied renders
+              key={`${renderVersion}`}
               stlUrl={stlBlobUrl}
               features={features}
               onFeatureSelect={(id) => setSelectedFeatureId(id)}
