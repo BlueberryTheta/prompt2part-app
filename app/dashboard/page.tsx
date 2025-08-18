@@ -101,6 +101,7 @@ export default function DashboardPage() {
     fetchData()
   }, [router])
 
+
   // === Prompt helper (kept for reference paths you already use) ===
   function buildGuidedPrompt(currentCode: string, userInstruction: string, res: number) {
     return [

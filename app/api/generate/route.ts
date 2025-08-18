@@ -136,6 +136,40 @@ function looksLikeSCAD(code: string) {
   return /cube|cylinder|translate|difference|union|rotate|linear_extrude/i.test(code)
 }
 
+/**
+ * --- NEW ---
+ * Some generations assign geometry to variables (e.g., a=cube(...); b=translate(...)cylinder(...);)
+ * but forget a top-level union(). OpenSCAD then fails to parse or renders nothing.
+ * If we detect geometry-assignments AND no top-level CSG op, we append: union(){ a; b; ... }
+ */
+function sanitizeGeometryAssignments(code: string): { code: string; changed: boolean } {
+  const geomOps =
+    '(translate|rotate|scale|mirror|union|difference|intersection|hull|minkowski|cube|cylinder|sphere|polyhedron|linear_extrude|rotate_extrude)'
+  const assignRe = new RegExp(
+    // start of line + var = <geomOp>(
+    String.raw`(^|\n)\s*([A-Za-z_]\w*)\s*=\s*${geomOps}\s*\(`,
+    'g'
+  )
+
+  const topLevelCSG = /\b(?:union|difference|intersection)\s*\(/m.test(code)
+
+  // Collect variable names that look like geometry assignments
+  const names = new Set<string>()
+  let m: RegExpExecArray | null
+  while ((m = assignRe.exec(code)) !== null) {
+    const name = m[2]
+    if (name) names.add(name)
+  }
+
+  if (names.size > 0 && !topLevelCSG) {
+    const tail = `\n\nunion(){\n  ${Array.from(names)
+      .map((n) => `${n};`)
+      .join('\n  ')}\n}\n`
+    return { code: code.trimEnd() + tail, changed: true }
+  }
+  return { code, changed: false }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { prompt, history = [], spec: incomingSpec = {}, selection } = (await req.json()) as ApiReq
@@ -263,6 +297,12 @@ export async function POST(req: NextRequest) {
     if (m) code = m[1].trim()
     code = code.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '')
 
+    // --- NEW: sanitize geometry assignments into a valid top-level union() if needed ---
+    const sanitized = sanitizeGeometryAssignments(code)
+    if (sanitized.changed) {
+      code = sanitized.code
+    }
+
     function breachesInnerWallPattern(code: string) {
       const innerRef = /\bmug_diameter\s*\/\s*2\s*-\s*wall_thickness\s*-\s*[\w\.]+\b/i.test(code)
       const naiveInnerR = /\binner_r\b.*translate\(\s*\[\s*inner_r\b/i.test(code)
@@ -319,7 +359,7 @@ export async function POST(req: NextRequest) {
       spec: mergedSpec,
       assumptions,
       code,
-      actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults', 'generated_code'],
+      actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults', 'generated_code']
     } satisfies ApiResp)
   } catch (err: any) {
     console.error('🛑 /api/generate fatal error:', err?.message || err)
