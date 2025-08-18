@@ -137,37 +137,68 @@ function looksLikeSCAD(code: string) {
 }
 
 /**
- * --- NEW ---
- * Some generations assign geometry to variables (e.g., a=cube(...); b=translate(...)cylinder(...);)
- * but forget a top-level union(). OpenSCAD then fails to parse or renders nothing.
- * If we detect geometry-assignments AND no top-level CSG op, we append: union(){ a; b; ... }
+ * Rewrites invalid "geometry assignment" patterns into valid statements and
+ * inlines references in any top-level CSG. Also creates a top-level union()
+ * when geometry exists but no top-level CSG is present.
+ *
+ * Example in:
+ *   a = cube(10);
+ *   b = translate([0,0,5]) cylinder(d=5,h=10);
+ *   union(){ a; b; }
+ *
+ * Example out:
+ *   // a = cube(10);  (removed)
+ *   // b = ...
+ *   union(){
+ *     cube(10);
+ *     translate([0,0,5]) cylinder(d=5,h=10);
+ *   }
  */
-function sanitizeGeometryAssignments(code: string): { code: string; changed: boolean } {
-  const geomOps =
-    '(translate|rotate|scale|mirror|union|difference|intersection|hull|minkowski|cube|cylinder|sphere|polyhedron|linear_extrude|rotate_extrude)'
-  const assignRe = new RegExp(
-    // start of line + var = <geomOp>(
-    String.raw`(^|\n)\s*([A-Za-z_]\w*)\s*=\s*${geomOps}\s*\(`,
-    'g'
-  )
+function sanitizeAndInlineOpenSCAD(code: string): { code: string; changed: boolean } {
+  let changed = false
+  let src = code
 
-  const topLevelCSG = /\b(?:union|difference|intersection)\s*\(/m.test(code)
-
-  // Collect variable names that look like geometry assignments
-  const names = new Set<string>()
+  // 1) Collect assignments (name = <expr>;), multi-line safe (non-greedy up to first semicolon)
+  //    We'll allow comments and whitespace between tokens.
+  const assignRe = /(^|\n)\s*([A-Za-z_]\w*)\s*=\s*([\s\S]*?)\s*;\s*/g
+  const assignments = new Map<string, string>()
   let m: RegExpExecArray | null
-  while ((m = assignRe.exec(code)) !== null) {
-    const name = m[2]
-    if (name) names.add(name)
+  while ((m = assignRe.exec(src)) !== null) {
+    const varName = m[2]
+    const rhs = m[3].trim()
+    if (varName && rhs) assignments.set(varName, rhs)
   }
 
-  if (names.size > 0 && !topLevelCSG) {
-    const tail = `\n\nunion(){\n  ${Array.from(names)
-      .map((n) => `${n};`)
-      .join('\n  ')}\n}\n`
-    return { code: code.trimEnd() + tail, changed: true }
+  if (assignments.size > 0) {
+    changed = true
+    // 2) Remove the assignment lines from the source
+    src = src.replace(assignRe, (full) => {
+      // Keep a comment placeholder to ease debugging
+      return full.startsWith('\n') ? '\n// (removed invalid geometry assignment)\n' : '// (removed invalid geometry assignment)\n'
+    })
+
+    // 3) Inline references "name;" with the captured RHS "rhs;"
+    //    We do this globally, but only for stand-alone statements ending with ';'
+    for (const [name, rhs] of assignments) {
+      const refRe = new RegExp(`(^|\\n)\\s*${name}\\s*;\\s*`, 'g')
+      src = src.replace(refRe, (_full, pre) => `${pre}${rhs};\n`)
+    }
   }
-  return { code, changed: false }
+
+  // 4) If there is no top-level CSG (union/difference/intersection) but geometry statements exist,
+  //    wrap the whole thing in union(){ ... }
+  const hasTopCSG = /\b(?:union|difference|intersection)\s*\(/m.test(src)
+  const hasSomeGeom =
+    /\b(?:translate|rotate|scale|mirror|hull|minkowski|cube|cylinder|sphere|polyhedron|linear_extrude|rotate_extrude)\s*\(/m.test(
+      src
+    )
+
+  if (!hasTopCSG && hasSomeGeom) {
+    changed = true
+    src = `union(){\n${src}\n}\n`
+  }
+
+  return { code: src, changed }
 }
 
 export async function POST(req: NextRequest) {
@@ -297,11 +328,9 @@ export async function POST(req: NextRequest) {
     if (m) code = m[1].trim()
     code = code.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '')
 
-    // --- NEW: sanitize geometry assignments into a valid top-level union() if needed ---
-    const sanitized = sanitizeGeometryAssignments(code)
-    if (sanitized.changed) {
-      code = sanitized.code
-    }
+    // Fix invalid geometry-assignment style and inline references
+    const normalized = sanitizeAndInlineOpenSCAD(code)
+    if (normalized.changed) code = normalized.code
 
     function breachesInnerWallPattern(code: string) {
       const innerRef = /\bmug_diameter\s*\/\s*2\s*-\s*wall_thickness\s*-\s*[\w\.]+\b/i.test(code)
