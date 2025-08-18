@@ -327,87 +327,87 @@ export default function DashboardPage() {
   const [assumptions, setAssumptions] = useState<string[]>([])
 
   const handleSubmit = async () => {
-    if (!userPrompt) return
-    setLoading(true)
+  if (!userPrompt) return
+  setLoading(true)
 
-    // Snapshot BEFORE mutating so Undo returns to the current state
-    takeSnapshot()
+  // Snapshot BEFORE mutating so Undo returns to the current state
+  takeSnapshot()
 
-    const baseHistory: ChatMsg[] = [...history, { role: 'user', content: userPrompt }]
+  const baseHistory: ChatMsg[] = [...history, { role: 'user', content: userPrompt }]
 
-    // Start a fresh request; invalidate older async work
-    const myReqId = ++requestSeqRef.current
+  // Start a fresh request; invalidate older async work
+  const myReqId = ++requestSeqRef.current
 
-    try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: userPrompt,
-          history: baseHistory,
-          spec,
-          selection: lastScenePick
-            ? {
-                faceIndex: lastScenePick.groupId,
-                point: lastScenePick.point,
-              }
-            : undefined,
-        }),
-        cache: 'no-store',
-      })
-      const data = await res.json()
-      if (myReqId !== requestSeqRef.current) return // stale
+  try {
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: userPrompt,
+        history: baseHistory,
+        spec,
+        selection: lastScenePick
+          ? {
+              faceIndex: lastScenePick.groupId,
+              point: lastScenePick.point,
+            }
+          : undefined,
+      }),
+      cache: 'no-store',
+    })
+    const data = await res.json()
+    if (myReqId !== requestSeqRef.current) return // stale
 
-      // Always show assistant_text
-      const assistantText = data?.assistant_text || 'Okay.'
-      setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
-      setAssumptions(data?.assumptions || [])
+    // Always show assistant_text
+    const assistantText = data?.assistant_text || 'Okay.'
+    setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
+    setAssumptions(data?.assumptions || [])
 
-      // Only proceed to STL + features when we actually have code
-      if (data?.type === 'code' && data?.code) {
-        const code = data.code as string
-        setResponse(code)
-        setCodeGenerated(true)
+    // Only proceed to STL + features when we actually have code
+    if (data?.type === 'code' && data?.code) {
+      const code = data.code as string
+      setResponse(code)
+      setCodeGenerated(true)
 
-        // Render STL
-        try {
-          const url = await renderStlFromCodeStrict(code, resolution)
-          if (myReqId !== requestSeqRef.current) return // stale
-          setStlBlobUrl(url)
-          setRenderVersion(v => v + 1) // key bump to force Canvas remount
+      // Render STL
+      try {
+        const url = await renderStlFromCodeStrict(code, resolution)
+        if (myReqId !== requestSeqRef.current) return // stale
+        setStlBlobUrl(url)
+        setRenderVersion(v => v + 1) // force Canvas remount
 
-          // ✅ Update spec + features only after render succeeded
-          if (data?.spec) {
-            setSpec(data.spec as Spec)
-            mergeFeaturesFromSpec(data.spec as Spec)
-          }
-        } catch (e: any) {
-          if (myReqId !== requestSeqRef.current) return // stale
-          console.error('Render error:', e)
-          setHistory(h => [
-            ...h,
-            {
-              role: 'assistant',
-              content:
-                '⚠️ I generated code, but the render failed. Please clarify the request or try again (e.g., specify the face or dimensions more precisely).',
-            },
-          ])
-          // leave current STL & features untouched
+        // ✅ Update spec + features only after render succeeded
+        if (data?.spec) {
+          setSpec(data.spec as Spec)
+          mergeFeaturesFromSpec(data.spec as Spec)
         }
-      } else {
-        // type === 'questions' or anything without code:
-        // ❌ Do not touch spec/features here to avoid the tree getting ahead of the render
+      } catch (e: any) {
+        if (myReqId !== requestSeqRef.current) return // stale
+        console.error('Render error:', e)
+        setHistory(h => [
+          ...h,
+          {
+            role: 'assistant',
+            content:
+              '⚠️ I generated code, but the render failed. Please clarify the request or try again (e.g., specify the face or dimensions more precisely).',
+          },
+        ])
+        // leave current STL & features untouched
       }
-
-      setUserPrompt('')
-    } catch (err) {
-      if (myReqId !== requestSeqRef.current) return // stale
-      console.error('Client submit error:', err)
-      setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
-    } finally {
-      if (myReqId === requestSeqRef.current) setLoading(false)
+    } else {
+      // type === 'questions' or anything without code:
+      // ❌ Do not touch spec/features here to avoid the tree getting ahead of the render
     }
+
+    setUserPrompt('')
+  } catch (err) {
+    if (myReqId !== requestSeqRef.current) return // stale
+    console.error('Client submit error:', err)
+    setHistory([...baseHistory, { role: 'assistant', content: '❌ Something went wrong.' }])
+  } finally {
+    if (myReqId === requestSeqRef.current) setLoading(false)
   }
+}
 
   // === Projects: Save new / Update / Load / Rename / Delete ===
   const refreshProjects = async () => {
