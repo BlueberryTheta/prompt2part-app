@@ -16,7 +16,12 @@ export type Spec = {
     | { type: 'slot'; width?: number; length?: number; center?: { x: number; y: number }; angle?: number }
     | { type: 'fillet'; radius?: number; edges?: 'all' | 'none' | 'some' }
     | { type: 'chamfer'; size?: number; edges?: 'all' | 'none' | 'some' }
+    | { type: 'cube'; side_length?: number; position?: any }
+    | { type: 'cylinder'; diameter?: number; height?: number; position?: any; operation?: 'boss'|'cut' }
   >
+  // Some models have returned { cube: {...}, cylinder: {...} } at top-level; we’ll normalize that.
+  cube?: { side_length?: number, position?: any }
+  cylinder?: { diameter?: number, height?: number, position?: any, operation?: 'boss'|'cut' }
   tolerances?: { general?: number; hole_clearance?: number }
   notes?: string
 }
@@ -24,22 +29,45 @@ export type Spec = {
 type ApiReq = {
   prompt: string
   history?: Msg[]
-  spec?: Spec // last known spec from client
-  // Optional selection from PartViewer (face id / pick point)
+  spec?: Spec
   selection?: { faceIndex?: number; point?: [number, number, number] }
 }
 
 type ApiResp =
   | {
       type: 'answer' | 'questions' | 'code'
-      assistant_text: string // always provide something readable
-      spec: Spec // always echo back merged spec
-      assumptions?: string[] // when assistant applied small defaults
-      questions?: string[] // when more info is needed
-      code?: string // when we produced OpenSCAD
-      actions?: string[] // log what we did (merge, defaults, codegen)
+      assistant_text: string
+      spec: Spec
+      assumptions?: string[]
+      questions?: string[]
+      code?: string
+      actions?: string[]
     }
   | { error: string }
+
+// ---------- helpers ----------
+
+function normalizeSpec(spec: Spec | undefined): Spec {
+  if (!spec) return { units: 'mm', features: [] }
+  const units = spec.units ?? 'mm'
+  const features: NonNullable<Spec['features']> = Array.isArray(spec.features) ? [...spec.features] : []
+
+  // Accept alternate shapes like { cube: {...}, cylinder: {...} }
+  const tryPush = (obj: any) => {
+    const t = (obj?.type || '').toString().toLowerCase()
+    if (!t) return
+    features.push(obj)
+  }
+
+  if (spec.cube && typeof spec.cube === 'object') {
+    tryPush({ type: 'cube', ...spec.cube })
+  }
+  if (spec.cylinder && typeof spec.cylinder === 'object') {
+    tryPush({ type: 'cylinder', ...spec.cylinder })
+  }
+
+  return { ...spec, units, features }
+}
 
 function sysPromptClassifier() {
   return `
@@ -60,8 +88,7 @@ Rules:
 - Keep units consistent. Default to "mm" if not provided.
 - Do not ask about material options.
 - Do NOT change or infer existing global dimensions, features, or geometry unless the user explicitly requests a change.
-- Defaults may be added ONLY for NEW feature-local fields that are strictly required (e.g., a handle's width/length/thickness) and must be listed in "assumptions".
-- Never infer capacity/volume or compute new global dimensions from formulas unless the SPEC already includes an explicit target for that quantity (e.g., target_volume_ml).
+- Defaults may be added ONLY for NEW feature-local fields that are strictly required and must be listed in "assumptions".
 - Resolve ellipsis/pronouns using LAST_ASSISTANT_TEXT and UI_SELECTED_FACE:
   - If the user says "yes", "do it", "center", etc., apply it to the most recently requested/asked feature or dimension in LAST_ASSISTANT_TEXT.
   - If UI_SELECTED_FACE is provided (e.g., G5), treat it as the face reference for "this face"/"center of that face" for this turn.
@@ -83,33 +110,20 @@ You are an OpenSCAD generator. Produce only valid OpenSCAD.
 
 Rules:
 - Use millimeters if units == "mm".
-- Start with clear named parameters.
+- Start with a Parameters section that declares every symbol you use (e.g., side_length, cylinder_diameter, cylinder_height, cube_half_side, etc.). Do not reference any undefined identifiers.
 - Result must be a SINGLE, closed, 3D manifold suitable for FDM printing.
-- New features must be Boolean-combined with the main body in ONE top-level CSG (e.g., union()/difference()).
-- When attaching features (e.g., handles, bosses), push them into the host by >= 0.3 mm and union() so they fuse; never leave touching/coincident surfaces.
+- New features must be Boolean-combined with the main body in ONE top-level CSG (use union()/difference()).
+- When attaching features (boss), push into the host by >= 0.3 mm and union() so they fuse. For cuts, use difference().
 - Do not use 2D primitives (square/circle/polygon) without linear_extrude() or rotate_extrude().
 - If a feature references a face center, place it at that face's centroid.
-- For holes/slots, subtract with difference() and ensure through-cuts where requested.
 - Preserve existing spec values; do not change dimensions unless explicitly requested.
-- Do NOT invent or recompute global dimensions from formulas unless the SPEC explicitly provides that target (e.g., target_volume_ml). If absent, use SPEC as-is.
-- When hollowing a feature (e.g., handle loop), subtract a STRICTLY smaller inner solid (shrink in all axes by the shell), never larger.
-- Never place attachments using a positive "offset" away from the host (e.g., mug_diameter/2 + offset). Instead, compute the attach position so the part penetrates the host by an overlap: for a cylinder use x_attach = (outer_diameter/2 - wall_thickness) - attach_overlap, where attach_overlap >= 0.3 mm.
-- 2D ops (offset/square/circle/polygon) MUST be inside linear_extrude() or rotate_extrude(). Avoid offset-based shells on 2D unless extruded.
+- Do NOT invent global dimensions; use SPEC as-is.
 - Do NOT include Markdown or triple backticks. Return raw OpenSCAD only.
 - Do NOT set $fn; the caller controls tessellation.
-- No prose. No questions. RETURN ONLY CODE.
+- No prose. RETURN ONLY CODE.
+- Never include comments like "(removed invalid geometry assignment)".
 
-- For hollow shells (outer wall + inner cavity), attachments must reference the OUTER surface, not the inner wall. Use:
-  outer_r = outer_diameter/2;
-  inner_r = outer_r - wall_thickness;
-  attach_overlap >= 0.3;
-  x_attach = outer_r - attach_overlap; // overlap into the outer wall only
-
-- Never allow an attachment to penetrate the inner cavity unless explicitly requested. Enforce:
-  (attach_overlap + local_half_thickness) <= (wall_thickness - 0.2);
-  If this cannot be satisfied, reduce the local feature thickness or ask for clarification instead of breaching the cavity.
-
-- If SELECTION is provided, use it to place geometry on the specified face/region; do not ignore it.`.trim()
+If SELECTION is provided, use it to place geometry on the specified face/region.`.trim()
 }
 
 async function openai(messages: Msg[], max_tokens = 1200, temperature = 0.2) {
@@ -126,7 +140,6 @@ async function openai(messages: Msg[], max_tokens = 1200, temperature = 0.2) {
 }
 
 function safeParseJson(jsonish: string) {
-  // Extract largest JSON block if model added fluff
   const match = jsonish.match(/\{[\s\S]*\}/)
   if (!match) throw new Error('No JSON block found')
   return JSON.parse(match[0])
@@ -136,74 +149,111 @@ function looksLikeSCAD(code: string) {
   return /cube|cylinder|translate|difference|union|rotate|linear_extrude/i.test(code)
 }
 
-/**
- * Rewrites invalid "geometry assignment" patterns into valid statements and
- * inlines references in any top-level CSG. Also creates a top-level union()
- * when geometry exists but no top-level CSG is present.
- *
- * Example in:
- *   a = cube(10);
- *   b = translate([0,0,5]) cylinder(d=5,h=10);
- *   union(){ a; b; }
- *
- * Example out:
- *   // a = cube(10);  (removed)
- *   // b = ...
- *   union(){
- *     cube(10);
- *     translate([0,0,5]) cylinder(d=5,h=10);
- *   }
- */
-function sanitizeAndInlineOpenSCAD(code: string): { code: string; changed: boolean } {
-  let changed = false
-  let src = code
+// --- simple code repair utilities ---
 
-  // 1) Collect assignments (name = <expr>;), multi-line safe (non-greedy up to first semicolon)
-  //    We'll allow comments and whitespace between tokens.
-  const assignRe = /(^|\n)\s*([A-Za-z_]\w*)\s*=\s*([\s\S]*?)\s*;\s*/g
-  const assignments = new Map<string, string>()
-  let m: RegExpExecArray | null
-  while ((m = assignRe.exec(src)) !== null) {
-    const varName = m[2]
-    const rhs = m[3].trim()
-    if (varName && rhs) assignments.set(varName, rhs)
+function hasIdentifierUse(code: string, name: string) {
+  const re = new RegExp(`\\b${name}\\b`)
+  return re.test(code)
+}
+function hasIdentifierDef(code: string, name: string) {
+  const re = new RegExp(`\\b${name}\\s*=`, 'i')
+  return re.test(code)
+}
+
+function findCubeSideLength(spec: Spec): number | undefined {
+  const arr = spec.features || []
+  for (const f of arr) {
+    if ((f as any)?.type?.toString().toLowerCase() === 'cube') {
+      const sl = (f as any)?.side_length
+      if (typeof sl === 'number' && isFinite(sl)) return sl
+    }
   }
+  // also allow spec.cube
+  const sl2 = (spec as any)?.cube?.side_length
+  if (typeof sl2 === 'number' && isFinite(sl2)) return sl2
+  return undefined
+}
 
-  if (assignments.size > 0) {
-    changed = true
-    // 2) Remove the assignment lines from the source
-    src = src.replace(assignRe, (full) => {
-      // Keep a comment placeholder to ease debugging
-      return full.startsWith('\n') ? '\n// (removed invalid geometry assignment)\n' : '// (removed invalid geometry assignment)\n'
-    })
+function findCylinderDims(spec: Spec): { d?: number; h?: number } {
+  let d: number | undefined
+  let h: number | undefined
+  const arr = spec.features || []
+  for (const f of arr) {
+    if ((f as any)?.type?.toString().toLowerCase() === 'cylinder') {
+      const dd = (f as any)?.diameter
+      const hh = (f as any)?.height
+      if (typeof dd === 'number' && isFinite(dd)) d = dd
+      if (typeof hh === 'number' && isFinite(hh)) h = hh
+    }
+  }
+  // also allow spec.cylinder
+  const c2 = (spec as any)?.cylinder
+  if (c2) {
+    if (typeof c2.diameter === 'number' && isFinite(c2.diameter)) d = c2.diameter
+    if (typeof c2.height === 'number' && isFinite(c2.height)) h = c2.height
+  }
+  return { d, h }
+}
 
-    // 3) Inline references "name;" with the captured RHS "rhs;"
-    //    We do this globally, but only for stand-alone statements ending with ';'
-    for (const [name, rhs] of assignments) {
-      const refRe = new RegExp(`(^|\\n)\\s*${name}\\s*;\\s*`, 'g')
-      src = src.replace(refRe, (_full, pre) => `${pre}${rhs};\n`)
+/**
+ * Inject missing parameter definitions if code references them but doesn't define them,
+ * pulling values from SPEC where possible. This avoids render-time "Parser error".
+ */
+function repairScadIfNeeded(code: string, spec: Spec) {
+  let header = ''
+  const notes: string[] = []
+
+  // side_length
+  if (hasIdentifierUse(code, 'side_length') && !hasIdentifierDef(code, 'side_length')) {
+    const sl = findCubeSideLength(spec)
+    if (sl != null) {
+      header += `side_length = ${sl};\n`
+      notes.push('injected side_length from spec')
+    } else {
+      header += `side_length = 50;\n`
+      notes.push('injected default side_length=50')
+    }
+  }
+  // cube_half_side
+  if (hasIdentifierUse(code, 'cube_half_side') && !hasIdentifierDef(code, 'cube_half_side')) {
+    if (!hasIdentifierDef(code, 'side_length')) {
+      // If side_length not injected yet, add a safe default
+      header += `side_length = 50;\n`
+      notes.push('injected default side_length=50 for cube_half_side')
+    }
+    header += `cube_half_side = side_length / 2;\n`
+    notes.push('injected cube_half_side')
+  }
+  // cylinder_diameter
+  if (hasIdentifierUse(code, 'cylinder_diameter') && !hasIdentifierDef(code, 'cylinder_diameter')) {
+    const { d } = findCylinderDims(spec)
+    if (d != null) {
+      header += `cylinder_diameter = ${d};\n`
+      notes.push('injected cylinder_diameter from spec')
+    } else {
+      header += `cylinder_diameter = 10;\n`
+      notes.push('injected default cylinder_diameter=10')
+    }
+  }
+  // cylinder_height
+  if (hasIdentifierUse(code, 'cylinder_height') && !hasIdentifierDef(code, 'cylinder_height')) {
+    const { h } = findCylinderDims(spec)
+    if (h != null) {
+      header += `cylinder_height = ${h};\n`
+      notes.push('injected cylinder_height from spec')
+    } else {
+      header += `cylinder_height = 10;\n`
+      notes.push('injected default cylinder_height=10')
     }
   }
 
-  // 4) If there is no top-level CSG (union/difference/intersection) but geometry statements exist,
-  //    wrap the whole thing in union(){ ... }
-  const hasTopCSG = /\b(?:union|difference|intersection)\s*\(/m.test(src)
-  const hasSomeGeom =
-    /\b(?:translate|rotate|scale|mirror|hull|minkowski|cube|cylinder|sphere|polyhedron|linear_extrude|rotate_extrude)\s*\(/m.test(
-      src
-    )
-
-  if (!hasTopCSG && hasSomeGeom) {
-    changed = true
-    src = `union(){\n${src}\n}\n`
-  }
-
-  return { code: src, changed }
+  if (!header) return { code, notes }
+  return { code: `${header}\n${code}`, notes }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, history = [], spec: incomingSpec = {}, selection } = (await req.json()) as ApiReq
+    const { prompt, history = [], spec: incoming = {}, selection } = (await req.json()) as ApiReq
 
     // 1) classify intent
     const classifyMsg: Msg[] = [
@@ -220,7 +270,10 @@ export async function POST(req: NextRequest) {
       intent = 'ambiguous'
     }
 
-    // 2) handle pure question early (no spec change)
+    // Normalize incoming spec shape early
+    const incomingSpec = normalizeSpec(incoming)
+
+    // 2) handle pure question
     if (intent === 'question') {
       const qaMsg: Msg[] = [
         {
@@ -240,17 +293,13 @@ export async function POST(req: NextRequest) {
       } satisfies ApiResp)
     }
 
-    // Build recency/ellipsis helpers
-    const lastAssistant =
-      [...history].reverse().find((m) => m.role === 'assistant')?.content || ''
+    // 3) merge/update spec
+    const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content || ''
     const uiFaceHint =
       selection?.faceIndex != null
-        ? `UI_SELECTED_FACE: G${selection.faceIndex}${
-            selection?.point ? ` @ ${JSON.stringify(selection.point)}` : ''
-          }`
+        ? `UI_SELECTED_FACE: G${selection.faceIndex}${selection?.point ? ` @ ${JSON.stringify(selection.point)}` : ''}`
         : 'UI_SELECTED_FACE: none'
 
-    // 3) merge/update spec (for "change" or "ambiguous")
     const mergeMsg: Msg[] = [
       { role: 'system', content: sysPromptSpecMerge() },
       {
@@ -274,22 +323,18 @@ export async function POST(req: NextRequest) {
     let questions: string[] = []
     try {
       const parsed = safeParseJson(mergedRaw)
-      mergedSpec = parsed.spec || incomingSpec
+      mergedSpec = normalizeSpec(parsed.spec || incomingSpec)
       assumptions = parsed.assumptions || []
       missing = parsed.missing || []
       questions = parsed.questions || []
     } catch (e: any) {
       console.error('Spec merge parse error:', e?.message, mergedRaw)
-      return NextResponse.json(
-        { error: 'Spec merge failed: invalid JSON' } as ApiResp,
-        { status: 500 }
-      )
+      return NextResponse.json({ error: 'Spec merge failed: invalid JSON' } as ApiResp, { status: 500 })
     }
 
-    // Cap question count to keep the flow tight
+    // Cap question count
     if (questions.length > 2) questions = questions.slice(0, 2)
 
-    // If still missing info or ambiguous, ask questions (no code)
     if (intent === 'ambiguous' || (missing.length > 0 || questions.length > 0)) {
       const msg = [
         assumptions.length ? `Assumptions applied:\n- ${assumptions.join('\n- ')}` : null,
@@ -309,7 +354,7 @@ export async function POST(req: NextRequest) {
       } satisfies ApiResp)
     }
 
-    // 4) generate code if spec is good
+    // 4) generate code
     const codeMsg: Msg[] = [
       { role: 'system', content: sysPromptCode() },
       {
@@ -319,7 +364,7 @@ export async function POST(req: NextRequest) {
           `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}`,
       },
     ]
-    const codeRaw = await openai(codeMsg, 1800, 0.1)
+    let codeRaw = await openai(codeMsg, 1800, 0.1)
 
     // Strip fences / $fn
     const raw = (codeRaw || '').trim()
@@ -328,48 +373,13 @@ export async function POST(req: NextRequest) {
     if (m) code = m[1].trim()
     code = code.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '')
 
-    // Fix invalid geometry-assignment style and inline references
-    const normalized = sanitizeAndInlineOpenSCAD(code)
-    if (normalized.changed) code = normalized.code
-
-    function breachesInnerWallPattern(code: string) {
-      const innerRef = /\bmug_diameter\s*\/\s*2\s*-\s*wall_thickness\s*-\s*[\w\.]+\b/i.test(code)
-      const naiveInnerR = /\binner_r\b.*translate\(\s*\[\s*inner_r\b/i.test(code)
-      return innerRef || naiveInnerR ? 'inner_wall_reference' : null
+    // Repair pass: inject missing parameter definitions for used-but-undefined symbols
+    const repaired = repairScadIfNeeded(code, mergedSpec)
+    if (repaired.notes.length) {
+      code = repaired.code
     }
 
-    const innerBreach = breachesInnerWallPattern(code)
-    if (innerBreach) {
-      return NextResponse.json({
-        type: 'questions',
-        assistant_text:
-          'Your attachment was placed relative to the inner wall, which would breach the cavity. ' +
-          'Please specify an attach overlap into the **outer** wall (e.g., 0.5 mm), or say "use default overlap".',
-        spec: mergedSpec,
-        questions: ['Attach overlap into the OUTER wall (mm)? (Typical: 0.3–0.8)'],
-        actions: ['merged_spec', 'policy_guard_triggered', innerBreach],
-      } satisfies ApiResp)
-    }
-
-    function violatesAttachPolicy(code: string) {
-      const floatAway = /translate\(\s*\[\s*mug_diameter\s*\/\s*2\s*\+\s*[\w\.]+\s*,/i.test(code)
-      const usesHandleOffset =
-        /\bhandle_offset\b/i.test(code) && /mug_diameter\s*\/\s*2\s*\+\s*handle_offset/i.test(code)
-      return floatAway || usesHandleOffset ? 'float_attach' : null
-    }
-
-    const attachIssue = violatesAttachPolicy(code)
-    if (attachIssue) {
-      return NextResponse.json({
-        type: 'questions',
-        assistant_text:
-          'The attachment was placed away from the body. Please confirm an attach overlap (e.g., 0.5 mm), or say "use default overlap". I will regenerate with a fused attachment.',
-        spec: mergedSpec,
-        questions: ['Attach overlap into the wall (mm)? (Typical: 0.3–0.8)'],
-        actions: ['merged_spec', 'policy_guard_triggered', attachIssue],
-      } satisfies ApiResp)
-    }
-
+    // Basic sanity check
     if (!looksLikeSCAD(code)) {
       return NextResponse.json({
         type: 'questions',
@@ -388,7 +398,7 @@ export async function POST(req: NextRequest) {
       spec: mergedSpec,
       assumptions,
       code,
-      actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults', 'generated_code']
+      actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults', ...(repaired.notes.length ? ['repaired_code'] : []), 'generated_code'],
     } satisfies ApiResp)
   } catch (err: any) {
     console.error('🛑 /api/generate fatal error:', err?.message || err)
