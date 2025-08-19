@@ -264,54 +264,51 @@ export default function DashboardPage() {
 
   // === Feature utilities ===
   function normalizeFeatureList(spec?: Spec): Feature[] {
-    const list = (spec?.features || []) as any[]
-    if (!Array.isArray(list) || list.length === 0) return []
+  const list = (spec as any)?.features
+  if (!Array.isArray(list) || list.length === 0) return []
 
-    // Filter out ambiguous/unrenderable placeholders so the tree only shows “real” things
-    const filtered = list.filter((f) => {
-      const t = (f?.type || '').toString().toLowerCase()
-      if (t === 'cube') {
-        return Number.isFinite(f?.side_length)
-      }
-      if (t === 'cylinder') {
-        const okDims = Number.isFinite(f?.diameter) && Number.isFinite(f?.height)
-        if (!okDims) return false
-        // If it claims adjacency, require a concrete reference face
-        if (f?.position?.alignment === 'adjacent') {
-          return typeof f?.position?.reference_face === 'string' && /^G\d+$/.test(f.position.reference_face)
-        }
-        return true
-      }
-      // Default: allow only if not obviously incomplete
-      return true
-    })
+  const typeCounts = new Map<string, number>()
+  const out: Feature[] = []
 
-    const typeCounts = new Map<string, number>()
-    const out: Feature[] = []
+  for (const f of list) {
+    // Accept a wide variety of shapes: {type:'cube'|'cylinder'|...}
+    const rawType = (f?.type ?? 'feature').toString().toLowerCase().trim()
+    const type = rawType || 'feature'
+    const next = (typeCounts.get(type) || 0) + 1
+    typeCounts.set(type, next)
 
-    for (const f of filtered) {
-      const t = (f?.type || 'feature').toString().toLowerCase()
-      const next = (typeCounts.get(t) || 0) + 1
-      typeCounts.set(t, next)
+    const prettyType = type.charAt(0).toUpperCase() + type.slice(1)
+    const id = `${type}-${next}`
 
-      const prettyType = t.charAt(0).toUpperCase() + t.slice(1)
-      const id = `${t}-${next}`
+    // Try to pull a face id from several possible fields:
+    // base_face, face, faceIndex, position.reference_face, position.face
+    let groupId: number | undefined
+    const faceCand =
+      f?.base_face ??
+      f?.face ??
+      f?.faceIndex ??
+      f?.position?.reference_face ??
+      f?.position?.face
 
-      // Carry over group hint if present (e.g., base_face: "G1" or position.reference_face)
-      let groupId: number | undefined = undefined
-      const baseFace = f?.base_face || f?.face || f?.faceIndex || f?.position?.reference_face
-      if (typeof baseFace === 'string' && /^G\d+$/.test(baseFace)) {
-        groupId = parseInt(baseFace.slice(1), 10)
-      }
-
-      out.push({
-        id,
-        label: `${prettyType} ${next}`,
-        groupId,
-      })
+    if (typeof faceCand === 'string' && /^G\d+$/i.test(faceCand)) {
+      groupId = parseInt(faceCand.slice(1), 10)
+    } else if (typeof faceCand === 'number' && Number.isFinite(faceCand)) {
+      groupId = faceCand
     }
-    return out
+
+    // Optionally try to pull a position (center, etc.). We’ll only accept numeric tuples.
+    let position: [number, number, number] | undefined = undefined
+    const posCand = f?.position?.center ?? f?.position?.point ?? f?.center
+    if (Array.isArray(posCand) && posCand.length === 3 && posCand.every((n: any) => Number.isFinite(n))) {
+      position = [Number(posCand[0]), Number(posCand[1]), Number(posCand[2])]
+    }
+
+    out.push({ id, label: `${prettyType} ${next}`, groupId, position })
   }
+
+  return out
+}
+
 
   function mergeFeaturesFromSpec(spec?: Spec) {
     const fresh = normalizeFeatureList(spec)
@@ -366,6 +363,17 @@ export default function DashboardPage() {
     // Only proceed to STL + features when we actually have code
     if (data?.type === 'code' && data?.code) {
       const code = data.code as string
+
+      // ---- optimistic spec/features update (so the tree isn't empty) ----
+      const prevSpec = spec
+      const prevFeatures = features
+      if (data?.spec) {
+        setSpec(data.spec as Spec)
+        const fresh = normalizeFeatureList(data.spec as Spec)
+        setFeatures(fresh)
+      }
+      // ------------------------------------------------------------------
+
       setResponse(code)
       setCodeGenerated(true)
 
@@ -375,12 +383,6 @@ export default function DashboardPage() {
         if (myReqId !== requestSeqRef.current) return // stale
         setStlBlobUrl(url)
         setRenderVersion(v => v + 1) // force Canvas remount
-
-        // ✅ Update spec + features only after render succeeded
-        if (data?.spec) {
-          setSpec(data.spec as Spec)
-          mergeFeaturesFromSpec(data.spec as Spec)
-        }
       } catch (e: any) {
         if (myReqId !== requestSeqRef.current) return // stale
         console.error('Render error:', e)
@@ -392,7 +394,9 @@ export default function DashboardPage() {
               '⚠️ I generated code, but the render failed. Please clarify the request or try again (e.g., specify the face or dimensions more precisely).',
           },
         ])
-        // leave current STL & features untouched
+        // 🔁 Roll back optimistic spec/features so the tree doesn’t drift
+        setSpec(prevSpec)
+        setFeatures(prevFeatures)
       }
     } else {
       // type === 'questions' or anything without code:
