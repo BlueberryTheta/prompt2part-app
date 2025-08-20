@@ -2,15 +2,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
-const OPENAI_MODEL = 'gpt-4o' // or gpt-4o-mini
+const OPENAI_MODEL = 'gpt-4o'
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
 
-// ---------- SPEC TYPES (expanded to fit logs you shared) ----------
 export type Spec = {
   units?: 'mm' | 'inch'
   part_type?: string
-  overall?: { x?: number; y?: number; z?: number } // mm
+  overall?: { x?: number; y?: number; z?: number }
   features?: Array<
     | {
         type: 'hole'
@@ -31,23 +30,15 @@ export type Spec = {
         base_face?: string
         face?: string
       }
-    | {
-        type: 'fillet'
-        radius?: number
-        edges?: 'all' | 'none' | 'some'
-      }
-    | {
-        type: 'chamfer'
-        size?: number
-        edges?: 'all' | 'none' | 'some'
-      }
+    | { type: 'fillet'; radius?: number; edges?: 'all' | 'none' | 'some' }
+    | { type: 'chamfer'; size?: number; edges?: 'all' | 'none' | 'some' }
     | {
         type: 'cylinder'
         diameter?: number
         radius?: number
         height?: number
         position?: {
-          reference_face?: string // e.g. "G0"
+          reference_face?: string
           face?: string
           alignment?: 'center' | 'adjacent' | string
           orientation?: 'normal' | 'tangent' | string
@@ -65,6 +56,7 @@ export type Spec = {
           reference_face?: string
           face?: string
           alignment?: 'center' | 'adjacent' | string
+          offset?: number
         }
       }
   >
@@ -91,15 +83,14 @@ type ApiResp =
     }
   | { error: string }
 
-// ---------- SYSTEM PROMPTS ----------
+// ---------- prompts ----------
 function sysPromptClassifier() {
   return `
 You are an intent classifier for a CAD assistant.
 Decide if the user's message is:
-- "question" (they're asking about design choices or best practices)
-- "change" (they want to modify or create the model)
-- "ambiguous" (not enough info to tell)
-
+- "question"
+- "change"
+- "ambiguous"
 Return STRICT JSON: {"intent":"question"|"change"|"ambiguous","reason":"<short>"}`.trim()
 }
 
@@ -108,52 +99,34 @@ function sysPromptSpecMerge() {
 You are a CAD spec editor. Merge the new user request into the existing SPEC.
 
 Rules:
-- Keep units consistent. Default to "mm" if not provided.
-- Do not ask about material options.
-- Do NOT change or infer existing global dimensions, features, or geometry unless the user explicitly requests a change.
-- Defaults may be added ONLY for NEW feature-local fields that are strictly required and must be listed in "assumptions".
-- Resolve ellipsis/pronouns using LAST_ASSISTANT_TEXT and UI_SELECTED_FACE:
-  - If the user says "yes", "do it", "center", etc., apply it to the most recently requested/asked feature or dimension in LAST_ASSISTANT_TEXT.
-  - If UI_SELECTED_FACE is provided (e.g., G5), treat it as the face reference for "this face"/"center of that face" for this turn.
-  - "center" on a face means the geometric centroid of that planar face.
-- IMPORTANT DEFAULT: if a +cylinder+ references a face (base_face/face/position.reference_face present) and has no "operation", set "operation":"boss".
-  - "boss" means a protrusion (added with union()) that sticks OUT of the face by "height" (with a small overlap into the host to fuse).
-  - "cut" means a hole (subtract with difference()) that goes INTO the body.
-
-- If required info is missing for code, add explicit items to "missing" and ask pointed "questions". Keep questions minimal.
+- Keep units consistent. Default "mm".
+- Do not change existing geometry unless explicitly requested.
+- Resolve ellipsis/pronouns using LAST_ASSISTANT_TEXT and UI_SELECTED_FACE (e.g. "center" applies to that face).
+- IMPORTANT DEFAULT: if a cylinder references a face (base_face/face/position.reference_face) and has no "operation", set "operation":"boss".
+- If required info is missing, add "missing" and ask short, pointed "questions".
 - NEVER output code here.
 
 Output STRICT JSON:
-{
-  "spec": <merged spec>,
-  "assumptions": string[],
-  "questions": string[]
-}`.trim()
+{"spec": <merged spec>, "assumptions": string[], "questions": string[]}`.trim()
 }
 
 function sysPromptCode() {
   return `
-You are an OpenSCAD generator. Produce only valid OpenSCAD.
+You are an OpenSCAD generator. Produce only valid OpenSCAD (no markdown).
 
 Rules:
-- Units: millimeters if units == "mm".
-- Start with named parameters (e.g., side_length, cylinder_diameter, cylinder_height, attach_overlap).
-- Result must be a SINGLE, closed, 3D manifold suitable for FDM printing.
-- New features must be Boolean-combined with the main body in ONE top-level CSG (union()/difference()).
-- When attaching features (e.g., bosses), push them into the host by >= 0.3 mm (attach_overlap) and union() so they fuse; never leave coincident surfaces.
-- If a feature references a face center, place it at that face's centroid.
-- For holes/slots ("cut" operation), subtract with difference() and ensure through-cuts where requested.
-- Preserve existing spec values; do not change dimensions unless explicitly requested.
-- Do NOT include Markdown or triple backticks. Return raw OpenSCAD only.
-- Do NOT set $fn; the caller controls tessellation.
-- No prose. RETURN ONLY CODE.
-
-- BOSS on a face: the feature must PROTRUDE OUTWARD from that face by "height". Use center=false and position the base of the boss ON the face plane, then extend outward (plus small attach_overlap into host to fuse).
-- CUT on a face: subtract a cylinder starting ON the face plane and going INTO the body by "height" (or through).
-- If SELECTION is provided, use it to place geometry on the specified face/region; do not ignore it.`.trim()
+- Units: mm if units == "mm".
+- Start with named parameters.
+- Single closed manifold.
+- Combine all features in ONE top-level union()/difference().
+- Boss on a face: cylinder base ON the face (center=false), protrude OUTWARD by height, include small attach_overlap into host.
+- Cut on a face: subtract cylinder starting at face going INTO body by height/through.
+- If a face center is referenced, use the face centroid.
+- Do not include $fn (caller sets tessellation).
+- RETURN ONLY CODE.`.trim()
 }
 
-// ---------- OPENAI CALL ----------
+// ---------- openai ----------
 async function openai(messages: Msg[], max_tokens = 1200, temperature = 0.2) {
   const res = await fetch(OPENAI_URL, {
     method: 'POST',
@@ -167,7 +140,7 @@ async function openai(messages: Msg[], max_tokens = 1200, temperature = 0.2) {
   return json?.choices?.[0]?.message?.content ?? ''
 }
 
-// ---------- UTILS ----------
+// ---------- utils ----------
 function safeParseJson(jsonish: string) {
   const match = jsonish.match(/\{[\s\S]*\}/)
   if (!match) throw new Error('No JSON block found')
@@ -180,67 +153,54 @@ function looksLikeSCAD(code: string) {
   )
 }
 
-// Convert bad "geometry assignment" like: foo = cube(...);  into:
-// module foo(){ cube(...); } foo();
+// Convert "name = cube(...);" into "module name(){ cube(...); } name();"
 function fixGeometryAssignments(scad: string) {
   const geomHeads =
     '(?:translate|rotate|scale|mirror|union|difference|intersection|hull|minkowski|cube|sphere|cylinder|polyhedron|linear_extrude|rotate_extrude)'
-
-  // 1) Turn assignments into modules
-  //    Rough regex: start-of-line <name> = <geomHead>(...);
-  const assignRe = new RegExp(
-    String.raw`^(\s*)([A-Za-z_]\w*)\s*=\s*(${geomHeads})\s*\(`,
-    'mig'
-  )
-
-  // We'll collect names we convert, then post-replace bare "name;" with "name();"
+  const assignRe = new RegExp(String.raw`^(\s*)([A-Za-z_]\w*)\s*=\s*(${geomHeads})\s*\(`, 'mig')
   const converted = new Set<string>()
   let out = scad
   out = out.replace(assignRe, (_m, indent: string, name: string, head: string) => {
     converted.add(name)
-    return `${indent}module ${name}() { ${head}(` // we keep the rest of the line intact
+    return `${indent}module ${name}() { ${head}(`
   })
-  // Close braces where those module bodies end at the first semicolon after the geom.
-  // Add a } before the semicolon we find that ends the statement.
-  // Heuristic: find lines ending with `);` that are part of our module injection and add `} ` before `;`
   out = out.replace(/(\)\s*;)/g, '} $1')
-
-  // 2) Replace bare calls `name;` with `name();` for converted names
   if (converted.size > 0) {
     const namesAlt = Array.from(converted).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
     const bareUseRe = new RegExp(String.raw`(^|\W)(${namesAlt})\s*;`, 'g')
     out = out.replace(bareUseRe, (_m, pre: string, nm: string) => `${pre}${nm}();`)
   }
-
   return out
 }
 
-// Remove BOM/normalize LF/strip $fn/extract fenced blocks
 function sanitizeOpenSCAD(rawish: string) {
   let raw = (rawish || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').trim()
-
-  // Prefer fenced content if present
   const m = raw.match(/```(?:openscad|scad)?\s*([\s\S]*?)```/i)
   if (m) raw = m[1].trim()
-
-  // Strip any leading $fn
   raw = raw.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '')
-
-  // Fix "foo = cube(...);" geometry assignments into modules + calls
-  raw = fixGeometryAssignments(raw)
-
-  return raw
+  return fixGeometryAssignments(raw)
 }
 
-// If a cylinder boss is clearly coded as centered with center=true only (internal), ask to clarify
-function obviouslyInternalBoss(code: string) {
-  const hasUnion = /\bunion\s*\(/i.test(code)
-  const centeredCyl = /\bcylinder\s*\([^)]*center\s*=\s*true/i.test(code)
-  const noCenterFalse = !/\bcylinder\s*\([^)]*center\s*=\s*false/i.test(code)
-  return hasUnion && centeredCyl && noCenterFalse
+// Face helpers
+function toGFace(s?: string) {
+  if (!s || typeof s !== 'string') return s
+  const m = s.match(/^[gG](\d+)$/)
+  return m ? `G${m[1]}` : s
 }
 
-// Default cylinder with a face reference to 'boss' if missing
+function normalizeFacesInSpec(spec: Spec): Spec {
+  const out: Spec = JSON.parse(JSON.stringify(spec || {}))
+  if (!Array.isArray(out.features)) return out
+  for (const f of out.features as any[]) {
+    if (f.base_face) f.base_face = toGFace(f.base_face)
+    if (f.face) f.face = toGFace(f.face)
+    if (f.position?.reference_face) f.position.reference_face = toGFace(f.position.reference_face)
+    if (f.position?.face) f.position.face = toGFace(f.position.face)
+  }
+  return out
+}
+
+// Default cylinder-on-face -> boss
 function ensureCylinderBossDefault(spec: Spec): Spec {
   const out: Spec = JSON.parse(JSON.stringify(spec || {}))
   const feats = Array.isArray(out.features) ? out.features : []
@@ -255,57 +215,62 @@ function ensureCylinderBossDefault(spec: Spec): Spec {
   return out
 }
 
-// Collapse duplicate cylinders on the same face; prefer the last "specific" one
-function canonicalizeSpec(spec: Spec): Spec {
-  if (!spec?.features || !Array.isArray(spec.features)) return spec
-
-  type Key = string
-  const toKey = (f: any): Key => {
-    const t = (f?.type || '').toString().toLowerCase()
-    const face =
-      (f?.base_face ??
-        f?.face ??
-        f?.position?.reference_face ??
-        f?.position?.face) ?? 'none'
-    return `${t}|${face}`
-  }
-
-  const isSpecificCylinder = (f: any) => {
-    if ((f?.type || '').toString().toLowerCase() !== 'cylinder') return false
-    // Look across both shapes used in your logs
-    const r = f?.dimensions?.radius ?? f?.radius
-    const d = f?.dimensions?.diameter ?? f?.diameter
-    const h = f?.dimensions?.height ?? f?.height
-    return (r != null || d != null) && h != null
-  }
-
-  const groups = new Map<Key, any[]>()
-  for (const f of spec.features as any[]) {
-    const k = toKey(f)
-    const arr = groups.get(k) || []
-    arr.push(f)
-    groups.set(k, arr)
-  }
-
-  const result: any[] = []
-  for (const [key, arr] of groups) {
-    const [t] = key.split('|')
-    if (t === 'cylinder') {
-      const specifics = arr.filter(isSpecificCylinder)
-      if (specifics.length > 0) {
-        result.push(specifics[specifics.length - 1]) // keep last specific
-      } else {
-        result.push(arr[arr.length - 1]) // or last of the group
-      }
-    } else {
-      for (const f of arr) result.push(f)
+// Heuristic: if any face ref number is "huge", treat it as invalid and ask for clarification
+function hasSuspiciousFaceRef(spec: Spec, maxReasonable = 60): { bad: boolean; faces: string[] } {
+  const faces: string[] = []
+  const feats = spec.features || []
+  for (const f of feats as any[]) {
+    const fs = [f?.base_face, f?.face, f?.position?.reference_face, f?.position?.face].filter(Boolean)
+    for (const v of fs) {
+      const m = String(v).match(/^G(\d+)$/)
+      if (m && parseInt(m[1], 10) > maxReasonable) faces.push(String(v))
     }
   }
-
-  return { ...spec, features: result }
+  return { bad: faces.length > 0, faces }
 }
 
-// ---------- HANDLER ----------
+// Do we have any subtractive features in the spec?
+function hasCutFeatures(spec: Spec): boolean {
+  const feats = spec.features || []
+  return feats.some((f: any) => {
+    const t = String(f?.type || '').toLowerCase()
+    if (t === 'hole' || t === 'slot') return true
+    if (t === 'cylinder' && String(f?.operation || '').toLowerCase() === 'cut') return true
+    return false
+  })
+}
+
+// If the model emitted `difference(){ union(){...} SUBTRACT; }` but spec has no cuts,
+// rewrite it to `union(){ ... ; SUBTRACT; }` (make additive) to match "add a cube" intent.
+function rewriteDifferenceIfNoCuts(code: string, spec: Spec): string {
+  if (hasCutFeatures(spec)) return code
+  const outerDiff = code.match(/^\s*difference\s*\{\s*([\s\S]+)\s*\}\s*;?\s*$/i)
+  if (!outerDiff) return code
+
+  // Try to find an inner union block and any following blocks (simple heuristic)
+  const inner = outerDiff[1]
+  const unionMatch = inner.match(/\bunion\s*\{\s*([\s\S]*?)\s*\}/i)
+  if (!unionMatch) return code
+
+  const unionBody = unionMatch[1].trim()
+  // Everything after the union block inside difference becomes additional solids; make them additive
+  const afterUnion = inner.slice(inner.indexOf(unionMatch[0]) + unionMatch[0].length).trim()
+  // Remove surrounding braces/semicolons noise
+  const extras = afterUnion.replace(/^\s*;?/, '').replace(/\s*;?\s*$/, '')
+
+  const rebuilt = `union(){\n${unionBody}\n${extras ? '\n' + extras + '\n' : ''}}`
+  return rebuilt
+}
+
+// Detect internal-only boss pattern
+function obviouslyInternalBoss(code: string) {
+  const hasUnion = /\bunion\s*\(/i.test(code)
+  const centeredCyl = /\bcylinder\s*\([^)]*center\s*=\s*true/i.test(code)
+  const noCenterFalse = !/\bcylinder\s*\([^)]*center\s*=\s*false/i.test(code)
+  return hasUnion && centeredCyl && noCenterFalse
+}
+
+// ---------- handler ----------
 export async function POST(req: NextRequest) {
   try {
     const { prompt, history = [], spec: incomingSpec = {}, selection } =
@@ -326,13 +291,13 @@ export async function POST(req: NextRequest) {
       intent = 'ambiguous'
     }
 
-    // 2) pure question
+    // 2) Q/A early
     if (intent === 'question') {
       const qaMsg: Msg[] = [
         {
           role: 'system',
           content:
-            'You are a helpful CAD assistant. Answer the user’s question briefly and concretely for 3D printable parts. No code, no JSON.',
+            'You are a helpful CAD assistant. Answer briefly and concretely for 3D printable parts. No code, no JSON.',
         },
         ...history,
         { role: 'user', content: prompt },
@@ -346,9 +311,8 @@ export async function POST(req: NextRequest) {
       } satisfies ApiResp)
     }
 
-    // 3) merge/update spec
-    const lastAssistant =
-      [...history].reverse().find(m => m.role === 'assistant')?.content || ''
+    // 3) merge spec
+    const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content || ''
     const uiFaceHint =
       selection?.faceIndex != null
         ? `UI_SELECTED_FACE: G${selection.faceIndex}${
@@ -385,19 +349,28 @@ export async function POST(req: NextRequest) {
       questions = parsed.questions || []
     } catch (e: any) {
       console.error('Spec merge parse error:', e?.message, mergedRaw)
-      return NextResponse.json(
-        { error: 'Spec merge failed: invalid JSON' } as ApiResp,
-        { status: 500 }
-      )
+      return NextResponse.json({ error: 'Spec merge failed: invalid JSON' } as ApiResp, { status: 500 })
     }
 
-    // Defaults / canonicalization
+    // Normalize & defaults
+    mergedSpec = normalizeFacesInSpec(mergedSpec)
     mergedSpec = ensureCylinderBossDefault(mergedSpec)
-    mergedSpec = canonicalizeSpec(mergedSpec)
 
-    if (questions.length > 2) questions = questions.slice(0, 2)
+    // Guard impossible faces early
+    const suspicious = hasSuspiciousFaceRef(mergedSpec)
+    if (suspicious.bad) {
+      return NextResponse.json({
+        type: 'questions',
+        assistant_text:
+          `I see face references that look out of range (${suspicious.faces.join(', ')}). ` +
+          `Please click a face in the viewer or specify a valid G# face (e.g., G0–G40).`,
+        spec: mergedSpec,
+        questions: ['Which exact face (G#) should this feature reference?'],
+        actions: ['merged_spec', 'invalid_face_guard'],
+      } satisfies ApiResp)
+    }
 
-    // Ask if ambiguous
+    // Ask if still unclear
     if (intent === 'ambiguous' || (missing.length > 0 || questions.length > 0)) {
       const msg = [
         assumptions.length ? `Assumptions applied:\n- ${assumptions.join('\n- ')}` : null,
@@ -429,8 +402,11 @@ export async function POST(req: NextRequest) {
     ]
     const codeRaw = await openai(codeMsg, 1800, 0.1)
 
-    // Sanitize code
+    // Sanitize & post-process code
     let code = sanitizeOpenSCAD(codeRaw)
+
+    // If no cuts requested but model used difference(), turn it into union()
+    code = rewriteDifferenceIfNoCuts(code, mergedSpec)
 
     if (!looksLikeSCAD(code)) {
       return NextResponse.json({
@@ -446,7 +422,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         type: 'questions',
         assistant_text:
-          'The cylinder appears to be centered inside the cube (it won’t change the outer shape). Should it be a **boss** that sticks **out of the referenced face**, or a **hole** cut into the body?',
+          'The cylinder appears to be centered inside the cube (no outward boss). Should it be a **boss** that sticks **out of the referenced face**, or a **hole** cut into the body?',
         spec: mergedSpec,
         questions: ['Boss or hole for this cylinder on the face? (default: boss)'],
         actions: ['merged_spec', 'guard_internal_boss'],
