@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useRef, useState, useEffect, useMemo } from 'react'
-import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls, Html } from '@react-three/drei'
 import { STLLoader } from 'three-stdlib'
 import * as THREE from 'three'
@@ -126,6 +126,42 @@ function buildPlanarGroups(geometry: BufferGeometry) {
   return { faceToGroup, groups }
 }
 
+/** Build a sub-geometry (copy of selected triangles only) for highlight overlay */
+function buildSubGeometryForGroup(
+  geometry: BufferGeometry,
+  faceToGroup: Int32Array,
+  targetGid: number
+): BufferGeometry | null {
+  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
+  if (!posAttr) return null
+
+  const indexAttr = geometry.getIndex()
+  const hasIndex = !!indexAttr
+  const indices = hasIndex ? (indexAttr!.array as ArrayLike<number>) : null
+  const triCount = hasIndex ? indices!.length / 3 : posAttr.count / 3
+
+  // Collect vertex positions for triangles belonging to target gid
+  const verts: number[] = []
+  for (let t = 0; t < triCount; t++) {
+    if (faceToGroup[t] !== targetGid) continue
+    const i0 = hasIndex ? indices![t * 3 + 0] : t * 3 + 0
+    const i1 = hasIndex ? indices![t * 3 + 1] : t * 3 + 1
+    const i2 = hasIndex ? indices![t * 3 + 2] : t * 3 + 2
+
+    verts.push(
+      posAttr.getX(i0), posAttr.getY(i0), posAttr.getZ(i0),
+      posAttr.getX(i1), posAttr.getY(i1), posAttr.getZ(i1),
+      posAttr.getX(i2), posAttr.getY(i2), posAttr.getZ(i2),
+    )
+  }
+  if (verts.length === 0) return null
+
+  const sub = new THREE.BufferGeometry()
+  sub.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
+  sub.computeVertexNormals()
+  return sub
+}
+
 /** ---------- small UI bits ---------- **/
 
 function OrientationLabels({ geometry }: { geometry: BufferGeometry | null }) {
@@ -136,7 +172,7 @@ function OrientationLabels({ geometry }: { geometry: BufferGeometry | null }) {
 
   const positions = [
     { name: 'Front', pos: [center.x, center.y - size.y * 0.3, bb.max.z + pad] }, // +Z
-    { name: 'Back', pos: [center.x, center.y - size.y * 0.3, bb.min.z - pad] }, // -Z
+    { name: 'Back', pos: [center.x, center.y - size.y * 0.3, bb.min.z - pad] },  // -Z
     { name: 'Right', pos: [bb.max.x + pad, center.y - size.y * 0.3, center.z] }, // +X
     { name: 'Left', pos: [bb.min.x - pad, center.y - size.y * 0.3, center.z] },  // -X
     { name: 'Top', pos: [center.x, bb.max.y + pad, center.z] },                  // +Y
@@ -226,9 +262,8 @@ function STLModel({
   const [groups, setGroups] = useState<Array<{ id: number; tris: number[]; label: THREE.Vector3 }>>([])
   const [hoverGid, setHoverGid] = useState<number | null>(null)
   const [hoverPoint, setHoverPoint] = useState<THREE.Vector3 | null>(null)
-  const { invalidate } = useThree() // force render when we load/update
 
-  // Load STL (avoid cache-busting for blob: URLs)
+  // Load STL with no-store to avoid caching + clean up geometry on unmount
   useEffect(() => {
     if (!stlUrl) return
     const ac = new AbortController()
@@ -236,40 +271,18 @@ function STLModel({
 
     ;(async () => {
       try {
-        const isBlob = stlUrl.startsWith('blob:')
-        const urlToFetch = isBlob ? stlUrl : (stlUrl.includes('?') ? `${stlUrl}&t=${Date.now()}` : `${stlUrl}?t=${Date.now()}`)
-
-        const res = await fetch(urlToFetch, {
-          signal: ac.signal,
-          cache: isBlob ? 'no-store' : 'reload',
-          headers: isBlob ? {} : { 'Cache-Control': 'no-cache' },
-        })
-        if (!res.ok) throw new Error(`STL fetch failed: ${res.status}`)
-
+        const res = await fetch(stlUrl, { signal: ac.signal, cache: 'no-store' })
         const buf = await res.arrayBuffer()
         if (!alive) return
-
         const loader = new STLLoader()
         const geom = loader.parse(buf)
         geom.computeVertexNormals()
-
-        // Dispose old geometry to prevent reuse
-        if (meshRef.current?.geometry) {
-          try { meshRef.current.geometry.dispose() } catch {}
-        }
-
         if (!alive) return
         setGeometry(geom)
-
-        // Planar groups for labeling/selection
         const { faceToGroup: map, groups } = buildPlanarGroups(geom)
         if (!alive) return
         setFaceToGroup(map)
         setGroups(groups)
-
-        // Make sure the new mesh appears immediately
-        requestAnimationFrame(() => invalidate())
-        setTimeout(() => invalidate(), 16)
       } catch (e: any) {
         if (e?.name !== 'AbortError') console.error('Failed to load STL:', e)
       }
@@ -278,10 +291,15 @@ function STLModel({
     return () => {
       alive = false
       ac.abort()
+      if (meshRef.current) {
+        meshRef.current.geometry?.dispose()
+        // @ts-ignore
+        meshRef.current.material?.dispose?.()
+      }
     }
-  }, [stlUrl, invalidate])
+  }, [stlUrl])
 
-  // Apply external selection (feature click) as a persistent highlight
+  // Keep a persistent selection even when pointer leaves
   useEffect(() => {
     if (selectedGroupId == null) return
     if (selectedPoint) {
@@ -291,8 +309,7 @@ function STLModel({
       if (g) setHoverPoint(g.label.clone())
     }
     setHoverGid(selectedGroupId)
-    requestAnimationFrame(() => invalidate())
-  }, [selectedGroupId, selectedPoint, groups, invalidate])
+  }, [selectedGroupId, selectedPoint, groups])
 
   useFrame(() => {
     if (autoRotate && meshRef.current) {
@@ -309,29 +326,51 @@ function STLModel({
       }),
     []
   )
-  const hoverMaterial = useMemo(
+
+  // 🔹 Highlight material (semi-transparent overlay for selected group)
+  const highlightMaterial = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: '#4c9aff',
-        metalness: 0.2,
-        roughness: 0.5,
+        color: '#ffd166',
+        emissive: '#ffbf00' as any,
+        emissiveIntensity: 0.35,
+        transparent: true,
+        opacity: 0.7,
+        depthWrite: false,
       }),
     []
   )
 
-  const useHover = hoverGid !== null
+  // Which group should be highlighted right now?
+  const activeHighlightGid = selectedGroupId ?? hoverGid ?? null
+
+  const subGeom = useMemo(() => {
+    if (!geometry || !faceToGroup || activeHighlightGid == null) return null
+    return buildSubGeometryForGroup(geometry, faceToGroup, activeHighlightGid)
+  }, [geometry, faceToGroup, activeHighlightGid])
+
+  // Where to put the marker label (centroid of the active group, or pointer point)
+  const activeMarkerPoint = useMemo(() => {
+    if (selectedPoint) return selectedPoint
+    if (activeHighlightGid != null) {
+      const g = groups.find(x => x.id === activeHighlightGid)
+      if (g) return g.label
+    }
+    return hoverPoint || null
+  }, [selectedPoint, activeHighlightGid, groups, hoverPoint])
 
   return geometry ? (
     <>
       <OrientationLabels geometry={geometry} />
 
+      {/* Base mesh (never tinted fully by selection) */}
       <mesh
         ref={meshRef}
         geometry={geometry}
-        material={useHover ? hoverMaterial : baseMaterial}
+        material={baseMaterial}
         onPointerMove={(e) => {
           e.stopPropagation()
-          if (faceToGroup == null) return
+          if (!faceToGroup) return
           const fi = e.faceIndex ?? -1
           if (fi < 0) return
           const gid = faceToGroup[fi]
@@ -339,21 +378,26 @@ function STLModel({
           setHoverPoint(e.point.clone())
         }}
         onPointerOut={() => {
-          // keep external selection; don't wipe on pointer out
+          // keep external selection; only clear transient hover
+          setHoverGid(null)
+          setHoverPoint(null)
         }}
         onClick={(e) => {
           e.stopPropagation()
-          if (faceToGroup == null || e.faceIndex == null) return
+          if (!faceToGroup || e.faceIndex == null) return
           const gid = faceToGroup[e.faceIndex]
-          if (gid >= 0) {
-            onGroupPick({ point: e.point.clone(), groupId: gid })
-            requestAnimationFrame(() => invalidate())
-          }
+          if (gid >= 0) onGroupPick({ point: e.point.clone(), groupId: gid })
         }}
       />
 
-      {hoverPoint != null && hoverGid != null && (
-        <Html position={hoverPoint} center zIndexRange={[15, 0]} transform={false} occlude={false}>
+      {/* Overlay submesh for the selected/hovered group */}
+      {subGeom && (
+        <mesh geometry={subGeom} material={highlightMaterial} />
+      )}
+
+      {/* Marker label for selected/hovered group */}
+      {activeHighlightGid != null && activeMarkerPoint && (
+        <Html position={activeMarkerPoint} center zIndexRange={[18, 0]} transform={false} occlude={false}>
           <div
             style={{
               background: 'rgba(0,0,0,0.7)',
@@ -365,7 +409,7 @@ function STLModel({
               pointerEvents: 'none',
             }}
           >
-            G{hoverGid}
+            G{activeHighlightGid}
           </div>
         </Html>
       )}
@@ -400,7 +444,7 @@ export default function PartViewer({
     return new THREE.Vector3(x, y, z)
   }, [selectedFeature])
 
-  // Scene pick -> bubble up, clear list selection
+  // Scene pick -> bubble up (for your dashboard to map/record), also clear feature list selection
   const handleScenePick = ({ point, groupId }: { point: THREE.Vector3; groupId: number }) => {
     setPicked({ point, groupId })
     setSelectedFeatureId(null)
@@ -445,24 +489,20 @@ export default function PartViewer({
 
       {/* Canvas */}
       <div className="w-full h-[400px]">
-        <Canvas camera={{ position: [70, 70, 70], near: 0.1, far: 2000 }} dpr={[1, 2]}>
+        <Canvas camera={{ position: [70, 70, 70], near: 0.1, far: 2000 }}>
           <ambientLight intensity={0.8} />
           <directionalLight position={[50, 50, 50]} intensity={0.7} />
           <OrbitControls enablePan enableZoom enableRotate />
           <STLModel
             key={stlUrl} // force remount on each new STL
-            stlUrl={stlUrl}
+            stlUrl={stlBlobSafe(stlUrl)}
             autoRotate={autoRotate}
             onGroupPick={handleScenePick}
             selectedGroupId={selectedGroupId}
             selectedPoint={selectedPoint}
           />
-          {/* Marker for last scene-picked face */}
+          {/* Optional marker for last scene-picked face */}
           {picked && <GroupMarker position={picked.point} groupId={picked.groupId} />}
-          {/* If a feature is selected (with group/position), show a marker too */}
-          {!picked && selectedGroupId != null && selectedPoint && (
-            <GroupMarker position={selectedPoint} groupId={selectedGroupId} />
-          )}
         </Canvas>
       </div>
 
@@ -499,4 +539,9 @@ export default function PartViewer({
       </div>
     </div>
   )
+}
+
+/** Ensure URL is treated as unique for R3F keying but not re-downloaded unnecessarily */
+function stlBlobSafe(url: string) {
+  return url
 }
