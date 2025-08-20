@@ -342,7 +342,7 @@ export default function DashboardPage() {
       body: JSON.stringify({
         prompt: userPrompt,
         history: baseHistory,
-        spec,
+        spec, // send our current spec
         selection: lastScenePick
           ? {
               faceIndex: lastScenePick.groupId,
@@ -360,20 +360,14 @@ export default function DashboardPage() {
     setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
     setAssumptions(data?.assumptions || [])
 
-    // Only proceed to STL + features when we actually have code
+    // ✅ ALWAYS keep SPEC in sync with the server, even for `type: "questions"`
+    if (data?.spec) {
+      setSpec(data.spec as Spec)
+    }
+
+    // Proceed to STL + (then) features only when we actually have code
     if (data?.type === 'code' && data?.code) {
       const code = data.code as string
-
-      // ---- optimistic spec/features update (so the tree isn't empty) ----
-      const prevSpec = spec
-      const prevFeatures = features
-      if (data?.spec) {
-        setSpec(data.spec as Spec)
-        const fresh = normalizeFeatureList(data.spec as Spec)
-        setFeatures(fresh)
-      }
-      // ------------------------------------------------------------------
-
       setResponse(code)
       setCodeGenerated(true)
 
@@ -383,6 +377,12 @@ export default function DashboardPage() {
         if (myReqId !== requestSeqRef.current) return // stale
         setStlBlobUrl(url)
         setRenderVersion(v => v + 1) // force Canvas remount
+
+        // ✅ Update the feature tree ONLY AFTER a successful render
+        //    (prevents the tree from getting ahead of the viewer)
+        if (data?.spec) {
+          mergeFeaturesFromSpec(data.spec as Spec)
+        }
       } catch (e: any) {
         if (myReqId !== requestSeqRef.current) return // stale
         console.error('Render error:', e)
@@ -394,13 +394,12 @@ export default function DashboardPage() {
               '⚠️ I generated code, but the render failed. Please clarify the request or try again (e.g., specify the face or dimensions more precisely).',
           },
         ])
-        // 🔁 Roll back optimistic spec/features so the tree doesn’t drift
-        setSpec(prevSpec)
-        setFeatures(prevFeatures)
+        // Leave current STL & features untouched
       }
     } else {
-      // type === 'questions' or anything without code:
-      // ❌ Do not touch spec/features here to avoid the tree getting ahead of the render
+      // type === 'questions' (or any response without code):
+      // We already updated `spec` above so follow-up turns (like “G0”) retain the new feature,
+      // but we intentionally DO NOT update the feature tree yet.
     }
 
     setUserPrompt('')
@@ -412,6 +411,7 @@ export default function DashboardPage() {
     if (myReqId === requestSeqRef.current) setLoading(false)
   }
 }
+
 
   // === Projects: Save new / Update / Load / Rename / Delete ===
   const refreshProjects = async () => {
