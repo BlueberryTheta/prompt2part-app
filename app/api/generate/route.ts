@@ -10,6 +10,7 @@ export type Spec = {
   units?: 'mm' | 'inch'
   part_type?: string
   overall?: { x?: number; y?: number; z?: number }
+  // Primary field the client expects:
   features?: Array<
     | {
         type: 'hole'
@@ -60,6 +61,9 @@ export type Spec = {
         }
       }
   >
+  // Some models may return this legacy/alternative key; we normalize it.
+  // @ts-ignore
+  geometry?: Array<{ type: string; [k: string]: any }>
   tolerances?: { general?: number; hole_clearance?: number }
   notes?: string
 }
@@ -173,15 +177,6 @@ function fixGeometryAssignments(scad: string) {
   return out
 }
 
-function sanitizeOpenSCAD(rawish: string) {
-  let raw = (rawish || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').trim()
-  const m = raw.match(/```(?:openscad|scad)?\s*([\s\S]*?)```/i)
-  if (m) raw = m[1].trim()
-  raw = raw.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '')
-  return fixGeometryAssignments(raw)
-}
-
-// Face helpers
 function toGFace(s?: string) {
   if (!s || typeof s !== 'string') return s
   const m = s.match(/^[gG](\d+)$/)
@@ -215,6 +210,43 @@ function ensureCylinderBossDefault(spec: Spec): Spec {
   return out
 }
 
+// If model used `spec.geometry` instead of `spec.features`, fold it into features for the client.
+function normalizeGeometryToFeatures(spec: Spec): Spec {
+  if (!spec || !Array.isArray((spec as any).geometry) || ((spec as any).geometry as any[]).length === 0) {
+    return spec
+  }
+  const out: Spec = JSON.parse(JSON.stringify(spec))
+  const geom: any[] = (out as any).geometry || []
+  delete (out as any).geometry
+  out.features = [...(out.features || [])]
+
+  for (const g of geom) {
+    const t = String(g?.type || '').toLowerCase()
+    if (t === 'cube') {
+      out.features.push({
+        type: 'cube',
+        side_length: g?.side_length ?? g?.dimensions?.side_length ?? g?.width ?? g?.height ?? g?.depth,
+        dimensions: g?.dimensions,
+        position: g?.position,
+      } as any)
+    } else if (t === 'cylinder') {
+      out.features.push({
+        type: 'cylinder',
+        diameter: g?.diameter ?? g?.dimensions?.diameter ?? (g?.radius ? g.radius * 2 : undefined),
+        radius: g?.radius ?? g?.dimensions?.radius,
+        height: g?.height ?? g?.dimensions?.height,
+        position: g?.position,
+        base_face: g?.base_face ?? g?.face,
+        operation: g?.operation,
+      } as any)
+    } else {
+      // pass-through for other types
+      out.features.push(g)
+    }
+  }
+  return out
+}
+
 // Do we have any subtractive features in the spec?
 function hasCutFeatures(spec: Spec): boolean {
   const feats = spec.features || []
@@ -227,7 +259,7 @@ function hasCutFeatures(spec: Spec): boolean {
 }
 
 // If the model emitted `difference(){ union(){...} SUBTRACT; }` but spec has no cuts,
-// rewrite it to `union(){ ... ; SUBTRACT; }` (make additive) to match "add a cube" intent.
+// rewrite to `union(){ ... ; SUBTRACT; }` so additive-only edits still render.
 function rewriteDifferenceIfNoCuts(code: string, spec: Spec): string {
   if (hasCutFeatures(spec)) return code
   const outerDiff = code.match(/^\s*difference\s*\{\s*([\s\S]+)\s*\}\s*;?\s*$/i)
@@ -248,6 +280,51 @@ function obviouslyInternalBoss(code: string) {
   const centeredCyl = /\bcylinder\s*\([^)]*center\s*=\s*true/i.test(code)
   const noCenterFalse = !/\bcylinder\s*\([^)]*center\s*=\s*false/i.test(code)
   return hasUnion && centeredCyl && noCenterFalse
+}
+
+// -------- NEW: fix common OpenSCAD syntax glitches from the model ----------
+function fixCommonSyntaxScad(code: string) {
+  let out = code
+
+  // 1) Stray '}' before ')' like: center = true} );
+  out = out.replace(/(center\s*=\s*(?:true|false))\s*}\s*\)/gi, '$1)')
+
+  // 2) Trailing comma before ')' e.g., cube([..,], center=true, )
+  out = out.replace(/,\s*\)/g, ')')
+
+  // 3) Extra semicolons before '}' e.g., "foo(); }"
+  out = out.replace(/;\s*}/g, '}')
+
+  // 4) Balance parentheses and braces (best-effort)
+  const balance = (text: string, openChar: string, closeChar: string) => {
+    let count = 0
+    for (const ch of text) {
+      if (ch === openChar) count++
+      else if (ch === closeChar) count = Math.max(0, count - 1)
+    }
+    return count
+  }
+  const needParen = balance(out, '(', ')')
+  if (needParen > 0) out = out + ')'.repeat(needParen)
+  const needBrace = balance(out, '{', '}')
+  if (needBrace > 0) out = out + '}'.repeat(needBrace)
+
+  return out
+}
+
+function sanitizeOpenSCAD(rawish: string) {
+  let raw = (rawish || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').trim()
+  const m = raw.match(/```(?:openscad|scad)?\s*([\s\S]*?)```/i)
+  if (m) raw = m[1].trim()
+  raw = raw.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '')
+
+  // Convert "name = cube(...);" patterns into modules safely
+  raw = fixGeometryAssignments(raw)
+
+  // Heal common syntax glitches from the model
+  raw = fixCommonSyntaxScad(raw)
+
+  return raw
 }
 
 // ---------- handler ----------
@@ -332,7 +409,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Spec merge failed: invalid JSON' } as ApiResp, { status: 500 })
     }
 
-    // Normalize + defaults (NO face-range guard anymore)
+    // Normalize face casing & geometry->features; enforce cylinder boss default
+    mergedSpec = normalizeGeometryToFeatures(mergedSpec)
     mergedSpec = normalizeFacesInSpec(mergedSpec)
     mergedSpec = ensureCylinderBossDefault(mergedSpec)
 
@@ -368,10 +446,9 @@ export async function POST(req: NextRequest) {
     ]
     const codeRaw = await openai(codeMsg, 1800, 0.1)
 
-    // Sanitize & post-process code
+    // Sanitize & heal code
     let code = sanitizeOpenSCAD(codeRaw)
-
-    // If no cuts requested but model used difference(), turn it into union()
+    // If no cuts requested but model used difference(), turn into union()
     code = rewriteDifferenceIfNoCuts(code, mergedSpec)
 
     if (!looksLikeSCAD(code)) {
