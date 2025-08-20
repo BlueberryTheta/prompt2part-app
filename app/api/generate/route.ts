@@ -312,20 +312,42 @@ function fixCommonSyntaxScad(code: string) {
   return out
 }
 
-function sanitizeOpenSCAD(rawish: string) {
-  let raw = (rawish || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').trim()
-  const m = raw.match(/```(?:openscad|scad)?\s*([\s\S]*?)```/i)
-  if (m) raw = m[1].trim()
-  raw = raw.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '')
+// Insert semicolons when a function/primitive call is immediately followed by a closing brace,
+// e.g. "cube(...)}" -> "cube(...);}"
+function fixMissingSemicolonsNearBraces(code: string) {
+  let out = code;
 
-  // Convert "name = cube(...);" patterns into modules safely
-  raw = fixGeometryAssignments(raw)
+  // If a call ends with ')' and is directly followed by '}', insert ';' before '}'
+  out = out.replace(/(\))\s*}/g, '$1;}');
 
-  // Heal common syntax glitches from the model
-  raw = fixCommonSyntaxScad(raw)
+  // If file ends right after a ')', add a semicolon at EOF
+  out = out.replace(/(\))\s*$/g, '$1;');
 
-  return raw
+  return out;
 }
+
+function sanitizeOpenSCAD(rawish: string) {
+  let raw = (rawish || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').trim();
+
+  // Strip fences if present
+  const m = raw.match(/```(?:openscad|scad)?\s*([\s\S]*?)```/i);
+  if (m) raw = m[1].trim();
+
+  // Remove any $fn the model set; client controls tessellation
+  raw = raw.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '');
+
+  // Convert "name = cube(...);" into a safe module call
+  raw = fixGeometryAssignments(raw);
+
+  // Heal common syntax glitches (e.g. "center=true} )")
+  raw = fixCommonSyntaxScad(raw);
+
+  // 🔧 NEW: heal missing semicolons before '}' and at EOF
+  raw = fixMissingSemicolonsNearBraces(raw);
+
+  return raw;
+}
+
 
 // ---------- handler ----------
 export async function POST(req: NextRequest) {
