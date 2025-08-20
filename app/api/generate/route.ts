@@ -215,20 +215,6 @@ function ensureCylinderBossDefault(spec: Spec): Spec {
   return out
 }
 
-// Heuristic: if any face ref number is "huge", treat it as invalid and ask for clarification
-function hasSuspiciousFaceRef(spec: Spec, maxReasonable = 60): { bad: boolean; faces: string[] } {
-  const faces: string[] = []
-  const feats = spec.features || []
-  for (const f of feats as any[]) {
-    const fs = [f?.base_face, f?.face, f?.position?.reference_face, f?.position?.face].filter(Boolean)
-    for (const v of fs) {
-      const m = String(v).match(/^G(\d+)$/)
-      if (m && parseInt(m[1], 10) > maxReasonable) faces.push(String(v))
-    }
-  }
-  return { bad: faces.length > 0, faces }
-}
-
 // Do we have any subtractive features in the spec?
 function hasCutFeatures(spec: Spec): boolean {
   const feats = spec.features || []
@@ -246,18 +232,12 @@ function rewriteDifferenceIfNoCuts(code: string, spec: Spec): string {
   if (hasCutFeatures(spec)) return code
   const outerDiff = code.match(/^\s*difference\s*\{\s*([\s\S]+)\s*\}\s*;?\s*$/i)
   if (!outerDiff) return code
-
-  // Try to find an inner union block and any following blocks (simple heuristic)
   const inner = outerDiff[1]
   const unionMatch = inner.match(/\bunion\s*\{\s*([\s\S]*?)\s*\}/i)
   if (!unionMatch) return code
-
   const unionBody = unionMatch[1].trim()
-  // Everything after the union block inside difference becomes additional solids; make them additive
   const afterUnion = inner.slice(inner.indexOf(unionMatch[0]) + unionMatch[0].length).trim()
-  // Remove surrounding braces/semicolons noise
   const extras = afterUnion.replace(/^\s*;?/, '').replace(/\s*;?\s*$/, '')
-
   const rebuilt = `union(){\n${unionBody}\n${extras ? '\n' + extras + '\n' : ''}}`
   return rebuilt
 }
@@ -352,23 +332,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Spec merge failed: invalid JSON' } as ApiResp, { status: 500 })
     }
 
-    // Normalize & defaults
+    // Normalize + defaults (NO face-range guard anymore)
     mergedSpec = normalizeFacesInSpec(mergedSpec)
     mergedSpec = ensureCylinderBossDefault(mergedSpec)
-
-    // Guard impossible faces early
-    const suspicious = hasSuspiciousFaceRef(mergedSpec)
-    if (suspicious.bad) {
-      return NextResponse.json({
-        type: 'questions',
-        assistant_text:
-          `I see face references that look out of range (${suspicious.faces.join(', ')}). ` +
-          `Please click a face in the viewer or specify a valid G# face (e.g., G0–G40).`,
-        spec: mergedSpec,
-        questions: ['Which exact face (G#) should this feature reference?'],
-        actions: ['merged_spec', 'invalid_face_guard'],
-      } satisfies ApiResp)
-    }
 
     // Ask if still unclear
     if (intent === 'ambiguous' || (missing.length > 0 || questions.length > 0)) {
