@@ -143,9 +143,21 @@ export default function DashboardPage() {
   }
 
   async function renderStlFromCodeStrict(code: string, res: number): Promise<string> {
+  // Normalize line endings & strip odd BOMs
+  const clean = code.replace(/\r\n/g, '\n').replace(/^\uFEFF/, '')
+
+  // Wrap in a trivial root module; this avoids some parser edge cases
+  const wrapped = `
+$fn = ${res};
+module __root__() {
+${clean}
+}
+__root__();
+`.trim() + '\n'
+
+  async function tryRender(payload: string) {
     const formData = new FormData()
-    // prepend $fn for curve resolution
-    formData.append('code', `$fn = ${res};\n` + code)
+    formData.append('code', payload)
 
     const backendRes = await fetch(RENDER_URL, {
       method: 'POST',
@@ -153,23 +165,32 @@ export default function DashboardPage() {
       cache: 'no-store',
     })
 
-    const cloneText = await backendRes.clone().text()
+    const text = await backendRes.clone().text()
     if (!backendRes.ok) {
-      throw new Error(`Backend render error ${backendRes.status}: ${cloneText}`)
+      throw new Error(`Backend render error ${backendRes.status}: ${text}`)
     }
 
     const ct = backendRes.headers.get('Content-Type') || ''
     if (ct.includes('application/json')) {
-      throw new Error(`Backend returned JSON instead of STL: ${cloneText}`)
+      throw new Error(`Backend returned JSON instead of STL: ${text}`)
     }
 
     const blob = await backendRes.blob()
     if (!blob || blob.size === 0) throw new Error('Empty STL blob received.')
-
-    // revoke previous to ensure viewer refresh & no leaks
-    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
     return URL.createObjectURL(blob)
   }
+
+  // Try once with wrapped; if it fails, fall back to the raw (in case the wrapper trips a module/variable scope)
+  try {
+    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+    return await tryRender(wrapped)
+  } catch (_e) {
+    // Fallback: raw code with $fn prepended
+    const fallback = `$fn = ${res};\n${clean}\n`
+    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
+    return await tryRender(fallback)
+  }
+}
 
   // Auto-scroll chat
   useEffect(() => {
