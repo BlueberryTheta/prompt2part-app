@@ -514,6 +514,22 @@ export default function PartViewer({
         </button>
       </div>
 
+      {/* Tools */}
+      <div className="absolute right-2 top-12 z-10 flex gap-1">
+        <button
+          className="px-2 py-1 rounded bg-gray-900 text-white text-xs shadow hover:bg-black"
+          onClick={() => setShowGrid(v => !v)}
+        >
+          {showGrid ? 'Hide Grid' : 'Show Grid'}
+        </button>
+        <button
+          className="px-2 py-1 rounded bg-gray-900 text-white text-xs shadow hover:bg-black"
+          onClick={() => { setMeasureMode(v => !v); setMeasurePts([]) }}
+        >
+          {measureMode ? 'Exit Measure' : 'Measure'}
+        </button>
+      </div>
+
       {/* Canvas */}
       <div className="w-full h-[400px]">
         <Canvas
@@ -521,6 +537,7 @@ export default function PartViewer({
           frameloop={autoRotate ? 'always' : 'demand'}
           dpr={[1, 1.5]}
         >
+          {showGrid && <gridHelper args={[200, 20]} position={[0, -0.01, 0]} />}
           <ambientLight intensity={0.8} />
           <directionalLight position={[50, 50, 50]} intensity={0.7} />
           <OrbitControls enablePan enableZoom enableRotate />
@@ -528,12 +545,28 @@ export default function PartViewer({
             key={stlUrl} // force remount on each new STL
             stlUrl={stlBlobSafe(stlUrl)}
             autoRotate={autoRotate}
-            onGroupPick={handleScenePick}
+            onGroupPick={(info) => {
+              if (measureMode) {
+                setMeasurePts(prev => {
+                  const next = [...prev, info.point]
+                  return next.slice(-2)
+                })
+              } else {
+                handleScenePick(info)
+              }
+            }}
             selectedGroupId={selectedGroupId}
             selectedPoint={selectedPoint}
           />
           {/* Optional marker for last scene-picked face */}
           {picked && <GroupMarker position={picked.point} groupId={picked.groupId} />}
+          {measureMode && measurePts.length === 2 && (
+            <Html position={measurePts[1]} center zIndexRange={[21, 0]} transform={false} occlude={false}>
+              <div style={{ background: 'rgba(0,0,0,0.75)', color: 'white', padding: '4px 6px', borderRadius: 6, fontSize: 12 }}>
+                {measurePts[0].distanceTo(measurePts[1]).toFixed(2)} mm
+              </div>
+            </Html>
+          )}
         </Canvas>
       </div>
 

@@ -374,6 +374,22 @@ __root__();
   const [wizSlotSpacing, setWizSlotSpacing] = useState<number>(10)
   const [wizMount, setWizMount] = useState<'adhesive'|'screw'|'clamp'>('adhesive')
   const [wizDeskThickness, setWizDeskThickness] = useState<number>(20)
+  // Bracket quick params
+  const [wizBracketLeg, setWizBracketLeg] = useState<number>(40)
+  const [wizBracketWidth, setWizBracketWidth] = useState<number>(20)
+  const [wizBracketThk, setWizBracketThk] = useState<number>(4)
+  const [wizBracketHoleDia, setWizBracketHoleDia] = useState<number>(4)
+  const [wizBracketHoleSpace, setWizBracketHoleSpace] = useState<number>(20)
+  // Clamp quick params
+  const [wizClampJawWidth, setWizClampJawWidth] = useState<number>(30)
+  const [wizClampJawDepth, setWizClampJawDepth] = useState<number>(15)
+  const [wizClampScrewDia, setWizClampScrewDia] = useState<number>(5)
+  // Enclosure quick params
+  const [wizEnclLen, setWizEnclLen] = useState<number>(80)
+  const [wizEnclWid, setWizEnclWid] = useState<number>(50)
+  const [wizEnclH, setWizEnclH] = useState<number>(30)
+  const [wizEnclWall, setWizEnclWall] = useState<number>(2.4)
+  const [wizEnclFillet, setWizEnclFillet] = useState<number>(3)
   const [wizardDismissed, setWizardDismissed] = useState(false)
 
   // Heuristic: derive a reasonable answer text from a model question
@@ -861,6 +877,7 @@ __root__();
             const isCableHolder = t.includes('cable') && (t.includes('holder') || t.includes('clip'))
             const isBracket = t.includes('bracket')
             const isClamp = t.includes('clamp')
+            const isEnclosure = t.includes('enclosure') || t.includes('case')
             if (wizardDismissed) return null
             // Show for cable-holder style parts OR if we have any features (generic adaptive setup)
             const hasFeatures = Array.isArray((spec as any)?.features) && ((spec as any)?.features?.length || 0) > 0
@@ -898,6 +915,67 @@ __root__();
                     )}
                   </div>
                 )}
+                {isBracket && (
+                  <div className="grid grid-cols-2 gap-2 text-xs mt-2">
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Leg length (mm)</span>
+                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizBracketLeg} onChange={e=>setWizBracketLeg(Number(e.target.value))} />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Width (mm)</span>
+                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizBracketWidth} onChange={e=>setWizBracketWidth(Number(e.target.value))} />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Thickness (mm)</span>
+                      <input type="number" step="0.2" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizBracketThk} onChange={e=>setWizBracketThk(Number(e.target.value))} />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Hole Ø (mm)</span>
+                      <input type="number" step="0.5" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizBracketHoleDia} onChange={e=>setWizBracketHoleDia(Number(e.target.value))} />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Hole spacing (mm)</span>
+                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizBracketHoleSpace} onChange={e=>setWizBracketHoleSpace(Number(e.target.value))} />
+                    </label>
+                  </div>
+                )}
+
+                {isClamp && (
+                  <div className="grid grid-cols-2 gap-2 text-xs mt-2">
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Jaw width (mm)</span>
+                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizClampJawWidth} onChange={e=>setWizClampJawWidth(Number(e.target.value))} />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Jaw depth (mm)</span>
+                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizClampJawDepth} onChange={e=>setWizClampJawDepth(Number(e.target.value))} />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Screw Ø (mm)</span>
+                      <input type="number" step="0.5" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizClampScrewDia} onChange={e=>setWizClampScrewDia(Number(e.target.value))} />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Desk thickness (mm)</span>
+                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizDeskThickness} onChange={e=>setWizDeskThickness(Number(e.target.value))} />
+                    </label>
+                  </div>
+                )}
+
+                {isEnclosure && (
+                  <div className="grid grid-cols-2 gap-2 text-xs mt-2">
+                    <label className="flex flex-col gap-1"><span className="opacity-80">Length (mm)</span>
+                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizEnclLen} onChange={e=>setWizEnclLen(Number(e.target.value))} /></label>
+                    <label className="flex flex-col gap-1"><span className="opacity-80">Width (mm)</span>
+                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizEnclWid} onChange={e=>setWizEnclWid(Number(e.target.value))} /></label>
+                    <label className="flex flex-col gap-1"><span className="opacity-80">Height (mm)</span>
+                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizEnclH} onChange={e=>setWizEnclH(Number(e.target.value))} /></label>
+                    <label className="flex flex-col gap-1"><span className="opacity-80">Wall (mm)</span>
+                      <input type="number" step="0.2" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizEnclWall} onChange={e=>setWizEnclWall(Number(e.target.value))} /></label>
+                    <label className="flex flex-col gap-1"><span className="opacity-80">Fillet (mm)</span>
+                      <input type="number" step="0.5" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizEnclFillet} onChange={e=>setWizEnclFillet(Number(e.target.value))} /></label>
+                  </div>
+                )}
+
                 {/* Generic adaptive section: build quick prompts for detected features */}
                 {hasFeatures && (
                   <div className="mt-2 space-y-2">
@@ -933,9 +1011,7 @@ __root__();
                     </div>
                   </div>
                 )}
-                {(isBracket || isClamp) && (
-                  <div className="text-xs opacity-80">Fill in missing prompts above; this quick setup prioritizes cable holders.</div>
-                )}
+                {/* Contextual hint removed; panel now adapts with inputs above. */}
                 <div className="mt-2 flex justify-end">
                   <button
                     type="button"
@@ -945,9 +1021,14 @@ __root__();
                         parts.push(`Cable holder: cable diameter ${wizCableDiameter}mm, ${wizSlotCount} slots, spacing ${wizSlotSpacing}mm`)
                         parts.push(`Mount: ${wizMount}${wizMount==='clamp' ? ` (desk thickness ${wizDeskThickness}mm)` : ''}`)
                       } else if (isBracket) {
-                        parts.push('Use sensible defaults for an L-bracket and confirm key dimensions.')
+                        parts.push(`L-bracket: leg ${wizBracketLeg}mm, width ${wizBracketWidth}mm, thickness ${wizBracketThk}mm`)
+                        parts.push(`Mount holes: diameter ${wizBracketHoleDia}mm, spacing ${wizBracketHoleSpace}mm`)
                       } else if (isClamp) {
-                        parts.push('Use sensible defaults for a simple clamp and ask for jaw width if missing.')
+                        parts.push(`Clamp: jaw width ${wizClampJawWidth}mm, jaw depth ${wizClampJawDepth}mm, screw diameter ${wizClampScrewDia}mm`)
+                        parts.push(`Desk thickness ${wizDeskThickness}mm`)
+                      } else if (isEnclosure) {
+                        parts.push(`Enclosure: length ${wizEnclLen}mm, width ${wizEnclWid}mm, height ${wizEnclH}mm`)
+                        parts.push(`Wall ${wizEnclWall}mm, fillet ${wizEnclFillet}mm`)
                       }
                       handleSubmit(parts.join('. ') + '.')
                       setWizardDismissed(true)
