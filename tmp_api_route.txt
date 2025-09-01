@@ -102,7 +102,7 @@ Rules:
 - Keep units consistent. Default "mm".
 - Do not change existing geometry unless explicitly requested.
 - Resolve ellipsis/pronouns using LAST_ASSISTANT_TEXT and UI_SELECTED_FACE (e.g. "center" applies to that face).
-- Do not force additive vs subtractive operations; infer from the user's intent. If ambiguous and ACCEPT_DEFAULTS is false, ask briefly; if ACCEPT_DEFAULTS is true, choose reasonable defaults and proceed.
+- IMPORTANT DEFAULT: if a cylinder references a face (base_face/face/position.reference_face) and has no "operation", set "operation":"boss".
 - If required info is missing, add "missing" and ask up to 3 short, pointed "questions" with sensible defaults in parentheses, UNLESS ACCEPT_DEFAULTS is true.
 - Prefer concrete numbers. Suggest typical ranges where helpful.
 - NEVER output code here.
@@ -207,8 +207,19 @@ function normalizeFacesInSpec(spec: Spec): Spec {
 }
 
 // Default cylinder-on-face -> boss
-// Note: previously we defaulted cylinders-on-face to 'boss'.
-// This was removed to let the model infer user intent (boss vs cut).
+function ensureCylinderBossDefault(spec: Spec): Spec {
+  const out: Spec = JSON.parse(JSON.stringify(spec || {}))
+  const feats = Array.isArray(out.features) ? out.features : []
+  for (const f of feats as any[]) {
+    if ((f?.type || '').toLowerCase() === 'cylinder') {
+      const hasFace =
+        !!f?.base_face || !!f?.face || !!f?.position?.reference_face || !!f?.position?.face
+      if (hasFace && !f?.operation) f.operation = 'boss'
+    }
+  }
+  out.features = feats
+  return out
+}
 
 // If model used `spec.geometry` instead of `spec.features`, fold it into features for the client.
 function normalizeGeometryToFeatures(spec: Spec): Spec {
@@ -415,9 +426,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Spec merge failed: invalid JSON' } as ApiResp, { status: 500 })
     }
 
-    // Normalize face casing & geometry->features
+    // Normalize face casing & geometry->features; enforce cylinder boss default
     mergedSpec = normalizeGeometryToFeatures(mergedSpec)
     mergedSpec = normalizeFacesInSpec(mergedSpec)
+    mergedSpec = ensureCylinderBossDefault(mergedSpec)
 
     // Ask if still unclear
     if (missing.length > 0 || questions.length > 0) {
@@ -492,3 +504,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 })
   }
 }
+

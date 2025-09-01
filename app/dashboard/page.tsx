@@ -860,7 +860,9 @@ __root__();
             const isBracket = t.includes('bracket')
             const isClamp = t.includes('clamp')
             if (wizardDismissed) return null
-            if (!isCableHolder && !isBracket && !isClamp) return null
+            // Show for cable-holder style parts OR if we have any features (generic adaptive setup)
+            const hasFeatures = Array.isArray((spec as any)?.features) && ((spec as any)?.features?.length || 0) > 0
+            if (!isCableHolder && !isBracket && !isClamp && !hasFeatures) return null
             return (
               <div className={`mt-3 p-3 rounded border ${darkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'}`}>
                 <div className="font-semibold text-sm mb-2">Quick Setup</div>
@@ -892,6 +894,41 @@ __root__();
                         <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizDeskThickness} onChange={e=>setWizDeskThickness(Number(e.target.value))} />
                       </label>
                     )}
+                  </div>
+                )}
+                {/* Generic adaptive section: build quick prompts for detected features */}
+                {hasFeatures && (
+                  <div className="mt-2 space-y-2">
+                    <div className="text-xs opacity-80">Adaptive suggestions</div>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {Array.from(((spec as any)?.features as any[]) || []).slice(0, 4).map((f: any, idx: number) => {
+                        const t = String(f?.type || 'feature').toLowerCase()
+                        const label = (f?.label || t.charAt(0).toUpperCase() + t.slice(1)) + (idx+1)
+                        const mk = (text: string) => (
+                          <button key={`${t}-${idx}-${text}`} type="button" onClick={() => handleSubmit(`${text}`)} className={`px-2 py-1 rounded border ${darkMode ? 'border-gray-500 text-gray-200 hover:bg-gray-800' : 'border-gray-400 text-gray-800 hover:bg-gray-100'}`}>
+                            {text}
+                          </button>
+                        )
+                        const items: JSX.Element[] = []
+                        if (t === 'cube') {
+                          items.push(mk(`Increase height of ${label} by 5 mm.`))
+                          items.push(mk(`Increase width of ${label} by 5 mm.`))
+                        } else if (t === 'cylinder' || t === 'hole') {
+                          items.push(mk(`Increase diameter of ${label} by 1 mm.`))
+                          items.push(mk(`Make ${label} a ${t === 'hole' ? 'cut' : 'boss'} if not already.`))
+                        } else if (t === 'slot') {
+                          items.push(mk(`Increase slot width of ${label} by 1 mm.`))
+                          items.push(mk(`Increase slot length of ${label} by 2 mm.`))
+                        } else {
+                          items.push(mk(`Slightly enlarge ${label}.`))
+                        }
+                        return (
+                          <div key={`${t}-${idx}`} className="flex items-center gap-2">
+                            {items}
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                 )}
                 {(isBracket || isClamp) && (
