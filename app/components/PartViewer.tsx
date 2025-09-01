@@ -263,11 +263,12 @@ function STLModel({
   const [hoverGid, setHoverGid] = useState<number | null>(null)
   const [hoverPoint, setHoverPoint] = useState<THREE.Vector3 | null>(null)
 
-  // Load STL with no-store to avoid caching + clean up geometry on unmount
+  // Load STL with no-store to avoid caching + planargroup via worker for large meshes
   useEffect(() => {
     if (!stlUrl) return
     const ac = new AbortController()
     let alive = true
+    let worker: Worker | null = null
 
     ;(async () => {
       try {
@@ -279,10 +280,28 @@ function STLModel({
         geom.computeVertexNormals()
         if (!alive) return
         setGeometry(geom)
-        const { faceToGroup: map, groups } = buildPlanarGroups(geom)
-        if (!alive) return
-        setFaceToGroup(map)
-        setGroups(groups)
+        const posAttr = geom.getAttribute('position') as THREE.BufferAttribute | null
+        const indexAttr = geom.getIndex()
+        const triCount = posAttr ? (indexAttr ? (indexAttr.count / 3) : (posAttr.count / 3)) : 0
+        if (posAttr && triCount > 50000) {
+          // Offload to worker
+          const positions = posAttr.array as Float32Array
+          const rawIndex: any = indexAttr?.array ?? null
+          const indices = rawIndex ? new Uint32Array(rawIndex.buffer.slice(rawIndex.byteOffset, rawIndex.byteOffset + rawIndex.byteLength)) : null
+          worker = new Worker(new URL('./planarWorker.ts', import.meta.url), { type: 'module' })
+          worker.onmessage = (ev: MessageEvent<any>) => {
+            if (!alive) return
+            const out = ev.data as { faceToGroup: Int32Array; groups: Array<{ id:number; label:[number,number,number] }> }
+            setFaceToGroup(out.faceToGroup)
+            setGroups(out.groups.map(g => ({ id: g.id, tris: [], label: new THREE.Vector3(g.label[0], g.label[1], g.label[2]) })))
+          }
+          worker.postMessage({ positions, indices }, [positions.buffer, indices?.buffer].filter(Boolean) as any)
+        } else {
+          const { faceToGroup: map, groups } = buildPlanarGroups(geom)
+          if (!alive) return
+          setFaceToGroup(map)
+          setGroups(groups)
+        }
       } catch (e: any) {
         if (e?.name !== 'AbortError') console.error('Failed to load STL:', e)
       }
@@ -291,6 +310,9 @@ function STLModel({
     return () => {
       alive = false
       ac.abort()
+      if (worker) {
+        try { worker.terminate() } catch {}
+      }
       if (meshRef.current) {
         meshRef.current.geometry?.dispose()
         // @ts-ignore

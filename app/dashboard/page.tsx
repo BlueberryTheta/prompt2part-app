@@ -366,15 +366,23 @@ __root__();
   // === Submit ===
   const [spec, setSpec] = useState<Spec>({ units: 'mm' })
   const [assumptions, setAssumptions] = useState<string[]>([])
+  const [questions, setQuestions] = useState<string[]>([])
+  // Template wizard fields (e.g., cable holder)
+  const [wizCableDiameter, setWizCableDiameter] = useState<number>(5)
+  const [wizSlotCount, setWizSlotCount] = useState<number>(4)
+  const [wizSlotSpacing, setWizSlotSpacing] = useState<number>(10)
+  const [wizMount, setWizMount] = useState<'adhesive'|'screw'|'clamp'>('adhesive')
+  const [wizDeskThickness, setWizDeskThickness] = useState<number>(20)
 
-  const handleSubmit = async () => {
-  if (!userPrompt) return
+  const handleSubmit = async (overridePrompt?: string) => {
+  const promptToSend = (overridePrompt ?? userPrompt).trim()
+  if (!promptToSend) return
   setLoading(true)
 
   // Snapshot BEFORE mutating so Undo returns to the current state
   takeSnapshot()
 
-  const baseHistory: ChatMsg[] = [...history, { role: 'user', content: userPrompt }]
+  const baseHistory: ChatMsg[] = [...history, { role: 'user', content: promptToSend }]
 
   // Start a fresh request; invalidate older async work
   const myReqId = ++requestSeqRef.current
@@ -384,7 +392,7 @@ __root__();
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prompt: userPrompt,
+        prompt: promptToSend,
         history: baseHistory,
         spec, // send our current spec
         selection: lastScenePick
@@ -403,6 +411,7 @@ __root__();
     const assistantText = data?.assistant_text || 'Okay.'
     setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
     setAssumptions(data?.assumptions || [])
+    setQuestions(data?.questions || [])
 
     // ✅ ALWAYS keep SPEC in sync with the server, even for `type: "questions"`
     if (data?.spec) {
@@ -416,6 +425,7 @@ __root__();
       // parse parameters from new code
       setParams(extractParamsFromCode(code))
       setCodeGenerated(true)
+      setQuestions([])
 
       // Render STL
       try {
@@ -797,6 +807,99 @@ __root__();
             onChange={e => setUserPrompt(e.target.value)}
             placeholder="Describe your part or answer the AI's question..."
           />
+
+          {(questions.length > 0 || assumptions.length > 0) && (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {questions.map((q, idx) => (
+                <button
+                  key={`q-${idx}`}
+                  type="button"
+                  onClick={() => handleSubmit(q)}
+                  className={`text-xs px-2 py-1 rounded border ${darkMode ? 'border-indigo-400 text-indigo-300 hover:bg-indigo-900/30' : 'border-indigo-600 text-indigo-700 hover:bg-indigo-50'}`}
+                  title="Click to answer quickly"
+                >
+                  {q}
+                </button>
+              ))}
+              {assumptions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleSubmit('Use the listed defaults and proceed to generate the model.')}
+                  className={`text-xs px-2 py-1 rounded border ${darkMode ? 'border-green-400 text-green-300 hover:bg-green-900/30' : 'border-green-600 text-green-700 hover:bg-green-50'}`}
+                  title="Accept suggested defaults"
+                >
+                  Accept defaults
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Template wizard: suggest quick form for common parts */}
+          {(() => {
+            const t = String((spec as any)?.part_type || '').toLowerCase()
+            const isCableHolder = t.includes('cable') && (t.includes('holder') || t.includes('clip'))
+            const isBracket = t.includes('bracket')
+            const isClamp = t.includes('clamp')
+            if (!isCableHolder && !isBracket && !isClamp) return null
+            return (
+              <div className={`mt-3 p-3 rounded border ${darkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'}`}>
+                <div className="font-semibold text-sm mb-2">Quick Setup</div>
+                {isCableHolder && (
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Cable Ø (mm)</span>
+                      <input type="number" step="0.5" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizCableDiameter} onChange={e=>setWizCableDiameter(Number(e.target.value))} />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Slots</span>
+                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizSlotCount} onChange={e=>setWizSlotCount(Number(e.target.value))} />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Slot spacing (mm)</span>
+                      <input type="number" step="0.5" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizSlotSpacing} onChange={e=>setWizSlotSpacing(Number(e.target.value))} />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="opacity-80">Mount</span>
+                      <select className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizMount} onChange={e=>setWizMount(e.target.value as any)}>
+                        <option value="adhesive">Adhesive</option>
+                        <option value="screw">Screw</option>
+                        <option value="clamp">Clamp</option>
+                      </select>
+                    </label>
+                    {wizMount === 'clamp' && (
+                      <label className="flex flex-col gap-1">
+                        <span className="opacity-80">Desk thickness (mm)</span>
+                        <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizDeskThickness} onChange={e=>setWizDeskThickness(Number(e.target.value))} />
+                      </label>
+                    )}
+                  </div>
+                )}
+                {(isBracket || isClamp) && (
+                  <div className="text-xs opacity-80">Fill in missing prompts above; this quick setup prioritizes cable holders.</div>
+                )}
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const parts: string[] = []
+                      if (isCableHolder) {
+                        parts.push(`Cable holder: cable diameter ${wizCableDiameter}mm, ${wizSlotCount} slots, spacing ${wizSlotSpacing}mm`)
+                        parts.push(`Mount: ${wizMount}${wizMount==='clamp' ? ` (desk thickness ${wizDeskThickness}mm)` : ''}`)
+                      } else if (isBracket) {
+                        parts.push('Use sensible defaults for an L-bracket and confirm key dimensions.')
+                      } else if (isClamp) {
+                        parts.push('Use sensible defaults for a simple clamp and ask for jaw width if missing.')
+                      }
+                      handleSubmit(parts.join('. ') + '.')
+                    }}
+                    className="px-3 py-1 rounded bg-blue-700 text-white text-sm hover:bg-blue-800"
+                  >
+                    Apply Setup
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
 
           <div className="flex flex-wrap gap-2">
             <button
