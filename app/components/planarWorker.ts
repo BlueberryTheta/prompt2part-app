@@ -12,18 +12,19 @@ export type PlanarOut = {
   groups: Array<{ id: number; label: [number, number, number] }>
 }
 
-const ctx: DedicatedWorkerGlobalScope = self as any
+// Use loosely-typed worker globals to avoid requiring the 'webworker' lib in tsconfig
+// eslint-disable-next-line no-restricted-globals
+const ctx: any = self as any
 
-ctx.onmessage = (e: MessageEvent<PlanarIn>) => {
-  const { positions, indices } = e.data
+ctx.addEventListener('message', (e: any) => {
+  const { positions, indices } = (e && e.data) as PlanarIn
   try {
     const out = buildPlanarGroups(positions, indices || null)
-    ctx.postMessage(out, [out.faceToGroup.buffer])
+    ;(ctx.postMessage as any)(out, [out.faceToGroup.buffer])
   } catch (err) {
-    // Post empty result on failure to avoid hanging the main thread
-    ctx.postMessage({ faceToGroup: new Int32Array(0), groups: [] } as PlanarOut)
+    ;(ctx.postMessage as any)({ faceToGroup: new Int32Array(0), groups: [] } as PlanarOut)
   }
-}
+})
 
 function buildPlanarGroups(positions: Float32Array, indices: Uint32Array | null): PlanarOut {
   const hasIndex = !!indices && indices.length > 0
@@ -102,4 +103,3 @@ function buildPlanarGroups(positions: Float32Array, indices: Uint32Array | null)
 
   return { faceToGroup, groups: groups.map(g => ({ id: g.id, label: g.label })) }
 }
-
