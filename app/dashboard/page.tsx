@@ -904,7 +904,7 @@ __root__();
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={handleSubmit}
+              onClick={() => handleSubmit()}
               disabled={loading}
               className="bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded font-medium transition"
             >
