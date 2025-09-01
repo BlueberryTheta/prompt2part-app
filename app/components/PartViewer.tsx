@@ -451,6 +451,9 @@ export default function PartViewer({
 }: PartViewerProps) {
   const [picked, setPicked] = useState<{ point: THREE.Vector3; groupId: number } | null>(null)
   const [autoRotate, setAutoRotate] = useState<boolean>(true)
+  const [showGrid, setShowGrid] = useState<boolean>(false)
+  const [measureMode, setMeasureMode] = useState<boolean>(false)
+  const [measurePts, setMeasurePts] = useState<THREE.Vector3[]>([])
 
   // feature selection within the viewer (list click)
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)

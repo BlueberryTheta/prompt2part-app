@@ -15,6 +15,7 @@ export type Spec = {
   features?: Array<
     | {
         type: 'hole'
+        feature_id?: string
         diameter?: number
         position?: { x: number; y: number }
         count?: number
@@ -25,6 +26,7 @@ export type Spec = {
       }
     | {
         type: 'slot'
+        feature_id?: string
         width?: number
         length?: number
         center?: { x: number; y: number }
@@ -36,6 +38,7 @@ export type Spec = {
     | { type: 'chamfer'; size?: number; edges?: 'all' | 'none' | 'some' }
     | {
         type: 'cylinder'
+        feature_id?: string
         diameter?: number
         radius?: number
         height?: number
@@ -52,6 +55,7 @@ export type Spec = {
       }
     | {
         type: 'cube'
+        feature_id?: string
         side_length?: number
         dimensions?: { side_length?: number; width?: number; height?: number; depth?: number }
         position?: {
@@ -73,7 +77,7 @@ type ApiReq = {
   prompt: string
   history?: Msg[]
   spec?: Spec
-  selection?: { faceIndex?: number; point?: [number, number, number] }
+  selection?: { faceIndex?: number; point?: [number, number, number]; featureId?: string }
   acceptDefaults?: boolean
 }
 
@@ -107,7 +111,8 @@ Rules:
 - Prefer concrete numbers. Suggest typical ranges where helpful.
 - NEVER output code here.
 
-For a "cable holder to be mounted on a desk", ask about 2–3 of: cable diameter (e.g., 4–6mm), number of slots (e.g., 3–5), slot spacing (e.g., 8–12mm), mount type (adhesive | screw | clamp), desk thickness (for clamp), and orientation. Populate spec.features accordingly (cube body, slots, holes) but only with fields known or assumed.
+If UI_SELECTED_FEATURE is present, apply the change to that feature.
+For holders/brackets/clamps/enclosures/knobs/adapters, choose 2–3 key questions with defaults; otherwise proceed with reasonable assumptions.
 
 Output STRICT JSON:
 {"spec": <merged spec>, "assumptions": string[], "questions": string[]}`.trim()
@@ -126,6 +131,7 @@ Rules:
 - Cut on a face: subtract cylinder starting at face going INTO body by height/through.
 - If a face center is referenced, use the face centroid.
 - Do not include $fn (caller sets tessellation).
+- If there is exactly one top-level module defined, ensure it is called at the end.
 - RETURN ONLY CODE.`.trim()
 }
 
@@ -198,11 +204,26 @@ function normalizeFacesInSpec(spec: Spec): Spec {
   const out: Spec = JSON.parse(JSON.stringify(spec || {}))
   if (!Array.isArray(out.features)) return out
   for (const f of out.features as any[]) {
+    if (!f.feature_id && f.id) f.feature_id = f.id
     if (f.base_face) f.base_face = toGFace(f.base_face)
     if (f.face) f.face = toGFace(f.face)
     if (f.position?.reference_face) f.position.reference_face = toGFace(f.position.reference_face)
     if (f.position?.face) f.position.face = toGFace(f.position.face)
   }
+  return out
+}
+
+function ensureFeatureIds(spec: Spec): Spec {
+  const out: Spec = JSON.parse(JSON.stringify(spec || {}))
+  const feats: any[] = Array.isArray(out.features) ? out.features : []
+  let seq = 1
+  for (const f of feats) {
+    if (!f.feature_id) {
+      const t = String(f?.type || 'feature').toLowerCase()
+      f.feature_id = `${t}-${seq++}-${Math.random().toString(36).slice(2, 6)}`
+    }
+  }
+  out.features = feats
   return out
 }
 
@@ -358,6 +379,17 @@ function sanitizeOpenSCAD(rawish: string) {
   // Fix broken or empty call endings
   raw = fixBrokenEmptyCalls(raw);
 
+  // Ensure a top-level call if exactly one module is declared
+  try {
+    const modRe = /^\s*module\s+([A-Za-z_]\w*)\s*\(/gim
+    const mods = Array.from(raw.matchAll(modRe)).map(m => m[1])
+    if (mods.length === 1) {
+      const name = mods[0]
+      const hasCall = new RegExp(String.raw`(^|\W)${name}\s*\(`).test(raw.replace(modRe, ''))
+      if (!hasCall) raw = raw + `\n${name}();\n`
+    }
+  } catch {}
+
   return raw;
 }
 
@@ -373,12 +405,13 @@ export async function POST(req: NextRequest) {
 
     // 1) merge spec
     const lastAssistant = [...shortHistory].reverse().find(m => m.role === 'assistant')?.content || ''
-    const uiFaceHint =
+  const uiFaceHint =
       selection?.faceIndex != null
         ? `UI_SELECTED_FACE: G${selection.faceIndex}${
             selection?.point ? ` @ ${JSON.stringify(selection.point)}` : ''
           }`
         : 'UI_SELECTED_FACE: none'
+    const uiFeatureHint = selection?.featureId ? `UI_SELECTED_FEATURE: ${selection.featureId}` : 'UI_SELECTED_FEATURE: none'
 
     const mergeMsg: Msg[] = [
       { role: 'system', content: sysPromptSpecMerge() },
@@ -390,6 +423,7 @@ export async function POST(req: NextRequest) {
           `\n\nLAST_ASSISTANT_TEXT:\n` +
           lastAssistant +
           `\n\n${uiFaceHint}` +
+          `\n${uiFeatureHint}` +
           (selection ? `\n\nSELECTION:\n${JSON.stringify(selection, null, 2)}` : '') +
           `\n\nHISTORY_SNIPPET:\n` +
           JSON.stringify(shortHistory, null, 2) +
@@ -415,9 +449,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Spec merge failed: invalid JSON' } as ApiResp, { status: 500 })
     }
 
-    // Normalize face casing & geometry->features
+    // Normalize face casing & geometry->features and assign feature ids
     mergedSpec = normalizeGeometryToFeatures(mergedSpec)
     mergedSpec = normalizeFacesInSpec(mergedSpec)
+    mergedSpec = ensureFeatureIds(mergedSpec)
 
     // Ask if still unclear
     if (missing.length > 0 || questions.length > 0) {

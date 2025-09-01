@@ -323,7 +323,7 @@ __root__();
     typeCounts.set(type, next)
 
     const prettyType = type.charAt(0).toUpperCase() + type.slice(1)
-    const id = `${type}-${next}`
+    const id = (f?.feature_id || f?.id || `${type}-${next}`) as string
 
     // Try to pull a face id from several possible fields:
     // base_face, face, faceIndex, position.reference_face, position.face
@@ -417,6 +417,8 @@ __root__();
               point: lastScenePick.point,
             }
           : undefined,
+        // If a feature is selected in the UI, include its id to help the server target the change
+        ...(selectedFeatureId ? { selection: { ...(lastScenePick ? { faceIndex: lastScenePick.groupId, point: lastScenePick.point } : {}), featureId: selectedFeatureId } } : {}),
         acceptDefaults: !!options?.acceptDefaults,
       }),
       cache: 'no-store',
