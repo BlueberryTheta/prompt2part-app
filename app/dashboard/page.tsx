@@ -2,9 +2,15 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import { supabase } from '@/lib/supabaseClient'
-import PartViewer from '../components/PartViewer'
 import { Spec } from '../api/generate/route'
+
+// Defer heavy three/drei bundle until needed (client-only)
+const PartViewer = dynamic(() => import('@/app/components/PartViewer'), {
+  ssr: false,
+  loading: () => <div className="text-sm text-gray-600">Loading 3D viewer…</div>,
+})
 
 type ChatMsg = { role: 'user' | 'assistant'; content: string }
 
@@ -43,6 +49,9 @@ export default function DashboardPage() {
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const router = useRouter()
+
+  // Cache STL blob URLs by code+resolution to avoid redundant render fetches
+  const stlCacheRef = useRef<Map<string, string>>(new Map())
 
   // === Undo / Redo ===
   type ModelSnapshot = {
@@ -143,9 +152,19 @@ export default function DashboardPage() {
   }
 
   async function renderStlFromCodeStrict(code: string, res: number): Promise<string> {
+  // Stable cache key for code + tessellation
+  const hash = (s: string) => {
+    let h = 5381
+    for (let i = 0; i < s.length; i++) h = (h * 33) ^ s.charCodeAt(i)
+    return (h >>> 0).toString(36)
+  }
   // Normalize line endings & strip odd BOMs
   const clean = code.replace(/\r\n/g, '\n').replace(/^\uFEFF/, '')
-
+  const cacheKey = `${res}:${hash(clean)}`
+  const cached = stlCacheRef.current.get(cacheKey)
+  if (cached) {
+    return cached
+  }
   // Wrap in a trivial root module; this avoids some parser edge cases
   const wrapped = `
 $fn = ${res};
@@ -182,13 +201,15 @@ __root__();
 
   // Try once with wrapped; if it fails, fall back to the raw (in case the wrapper trips a module/variable scope)
   try {
-    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
-    return await tryRender(wrapped)
+    const url = await tryRender(wrapped)
+    stlCacheRef.current.set(cacheKey, url)
+    return url
   } catch (_e) {
     // Fallback: raw code with $fn prepended
     const fallback = `$fn = ${res};\n${clean}\n`
-    if (stlBlobUrl) URL.revokeObjectURL(stlBlobUrl)
-    return await tryRender(fallback)
+    const url = await tryRender(fallback)
+    stlCacheRef.current.set(cacheKey, url)
+    return url
   }
 }
 

@@ -1,5 +1,6 @@
 // app/api/generate/route.ts
 import { NextRequest, NextResponse } from 'next/server'
+export const runtime = 'edge'
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 const OPENAI_MODEL = 'gpt-4o'
@@ -88,16 +89,6 @@ type ApiResp =
   | { error: string }
 
 // ---------- prompts ----------
-function sysPromptClassifier() {
-  return `
-You are an intent classifier for a CAD assistant.
-Decide if the user's message is:
-- "question"
-- "change"
-- "ambiguous"
-Return STRICT JSON: {"intent":"question"|"change"|"ambiguous","reason":"<short>"}`.trim()
-}
-
 function sysPromptSpecMerge() {
   return `
 You are a CAD spec editor. Merge the new user request into the existing SPEC.
@@ -130,18 +121,30 @@ Rules:
 - RETURN ONLY CODE.`.trim()
 }
 
-// ---------- openai ----------
-async function openai(messages: Msg[], max_tokens = 1200, temperature = 0.2) {
-  const res = await fetch(OPENAI_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({ model: OPENAI_MODEL, messages, max_tokens, temperature }),
-  })
-  const json = await res.json()
-  return json?.choices?.[0]?.message?.content ?? ''
+// ---------- openai (with timeout) ----------
+async function openai(
+  messages: Msg[],
+  max_tokens = 1200,
+  temperature = 0.2,
+  timeoutMs = 20000
+) {
+  const ac = new AbortController()
+  const to = setTimeout(() => ac.abort(), timeoutMs)
+  try {
+    const res = await fetch(OPENAI_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({ model: OPENAI_MODEL, messages, max_tokens, temperature }),
+      signal: ac.signal,
+    })
+    const json = await res.json()
+    return json?.choices?.[0]?.message?.content ?? ''
+  } finally {
+    clearTimeout(to)
+  }
 }
 
 // ---------- utils ----------
@@ -355,42 +358,7 @@ export async function POST(req: NextRequest) {
     const { prompt, history = [], spec: incomingSpec = {}, selection } =
       (await req.json()) as ApiReq
 
-    // 1) classify
-    const classifyMsg: Msg[] = [
-      { role: 'system', content: sysPromptClassifier() },
-      ...history,
-      { role: 'user', content: prompt },
-    ]
-    const clsRaw = await openai(classifyMsg, 200, 0.1)
-    let intent: 'question' | 'change' | 'ambiguous' = 'ambiguous'
-    try {
-      const parsed = safeParseJson(clsRaw)
-      intent = parsed.intent
-    } catch {
-      intent = 'ambiguous'
-    }
-
-    // 2) Q/A early
-    if (intent === 'question') {
-      const qaMsg: Msg[] = [
-        {
-          role: 'system',
-          content:
-            'You are a helpful CAD assistant. Answer briefly and concretely for 3D printable parts. No code, no JSON.',
-        },
-        ...history,
-        { role: 'user', content: prompt },
-      ]
-      const answer = await openai(qaMsg, 500, 0.3)
-      return NextResponse.json({
-        type: 'answer',
-        assistant_text: answer?.trim() || 'Here are a few suggestions.',
-        spec: incomingSpec,
-        actions: ['answered_question'],
-      } satisfies ApiResp)
-    }
-
-    // 3) merge spec
+    // 1) merge spec
     const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content || ''
     const uiFaceHint =
       selection?.faceIndex != null
@@ -437,7 +405,7 @@ export async function POST(req: NextRequest) {
     mergedSpec = ensureCylinderBossDefault(mergedSpec)
 
     // Ask if still unclear
-    if (intent === 'ambiguous' || (missing.length > 0 || questions.length > 0)) {
+    if (missing.length > 0 || questions.length > 0) {
       const msg = [
         assumptions.length ? `Assumptions applied:\n- ${assumptions.join('\n- ')}` : null,
         missing.length ? `I still need:\n- ${missing.join('\n- ')}` : null,
@@ -456,7 +424,7 @@ export async function POST(req: NextRequest) {
       } satisfies ApiResp)
     }
 
-    // 4) codegen
+    // 2) codegen
     const codeMsg: Msg[] = [
       { role: 'system', content: sysPromptCode() },
       {

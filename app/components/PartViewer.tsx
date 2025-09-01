@@ -326,6 +326,7 @@ function STLModel({
       }),
     []
   )
+  useEffect(() => () => baseMaterial.dispose(), [baseMaterial])
 
   // 🔹 Highlight material (semi-transparent overlay for selected group)
   const highlightMaterial = useMemo(
@@ -340,6 +341,7 @@ function STLModel({
       }),
     []
   )
+  useEffect(() => () => highlightMaterial.dispose(), [highlightMaterial])
 
   // Which group should be highlighted right now?
   const activeHighlightGid = selectedGroupId ?? hoverGid ?? null
@@ -489,7 +491,11 @@ export default function PartViewer({
 
       {/* Canvas */}
       <div className="w-full h-[400px]">
-        <Canvas camera={{ position: [70, 70, 70], near: 0.1, far: 2000 }}>
+        <Canvas
+          camera={{ position: [70, 70, 70], near: 0.1, far: 2000 }}
+          frameloop={autoRotate ? 'always' : 'demand'}
+          dpr={[1, 1.5]}
+        >
           <ambientLight intensity={0.8} />
           <directionalLight position={[50, 50, 50]} intensity={0.7} />
           <OrbitControls enablePan enableZoom enableRotate />
