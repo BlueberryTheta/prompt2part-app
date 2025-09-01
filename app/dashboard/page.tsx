@@ -390,7 +390,7 @@ __root__();
     return q // fallback: user can edit before sending
   }
 
-  const handleSubmit = async (overridePrompt?: string) => {
+  const handleSubmit = async (overridePrompt?: string, options?: { acceptDefaults?: boolean }) => {
   const promptToSend = (overridePrompt ?? userPrompt).trim()
   if (!promptToSend) return
   setLoading(true)
@@ -417,6 +417,7 @@ __root__();
               point: lastScenePick.point,
             }
           : undefined,
+        acceptDefaults: !!options?.acceptDefaults,
       }),
       cache: 'no-store',
     })
@@ -842,7 +843,7 @@ __root__();
               {assumptions.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => handleSubmit('Use the listed defaults and proceed to generate the model.')}
+                  onClick={() => handleSubmit('Use the listed defaults and proceed to generate the model.', { acceptDefaults: true })}
                   className={`text-xs px-2 py-1 rounded border ${darkMode ? 'border-green-400 text-green-300 hover:bg-green-900/30' : 'border-green-600 text-green-700 hover:bg-green-50'}`}
                   title="Accept suggested defaults"
                 >

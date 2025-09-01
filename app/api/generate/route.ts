@@ -74,6 +74,7 @@ type ApiReq = {
   history?: Msg[]
   spec?: Spec
   selection?: { faceIndex?: number; point?: [number, number, number] }
+  acceptDefaults?: boolean
 }
 
 type ApiResp =
@@ -102,7 +103,7 @@ Rules:
 - Do not change existing geometry unless explicitly requested.
 - Resolve ellipsis/pronouns using LAST_ASSISTANT_TEXT and UI_SELECTED_FACE (e.g. "center" applies to that face).
 - IMPORTANT DEFAULT: if a cylinder references a face (base_face/face/position.reference_face) and has no "operation", set "operation":"boss".
-- If required info is missing, add "missing" and ask up to 3 short, pointed "questions" with sensible defaults in parentheses.
+- If required info is missing, add "missing" and ask up to 3 short, pointed "questions" with sensible defaults in parentheses, UNLESS ACCEPT_DEFAULTS is true.
 - Prefer concrete numbers. Suggest typical ranges where helpful.
 - NEVER output code here.
 
@@ -336,6 +337,16 @@ function fixMissingSemicolonsNearBraces(code: string) {
   return out;
 }
 
+// Heal broken empty/stray call endings like: name(} ); or name()}
+function fixBrokenEmptyCalls(code: string) {
+  let out = code
+  // Replace identifier( } ) -> identifier()
+  out = out.replace(/\b([A-Za-z_]\w*)\s*\(\s*\}\s*\)\s*;?/g, '$1();')
+  // Replace identifier() } -> identifier();
+  out = out.replace(/\b([A-Za-z_]\w*)\s*\(\s*\)\s*\}\s*;?/g, '$1();')
+  return out
+}
+
 function sanitizeOpenSCAD(rawish: string) {
   let raw = (rawish || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').trim();
 
@@ -355,6 +366,9 @@ function sanitizeOpenSCAD(rawish: string) {
   // 🔧 NEW: heal missing semicolons before '}' and at EOF
   raw = fixMissingSemicolonsNearBraces(raw);
 
+  // Fix broken or empty call endings
+  raw = fixBrokenEmptyCalls(raw);
+
   return raw;
 }
 
@@ -362,7 +376,7 @@ function sanitizeOpenSCAD(rawish: string) {
 // ---------- handler ----------
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, history = [], spec: incomingSpec = {}, selection } =
+    const { prompt, history = [], spec: incomingSpec = {}, selection, acceptDefaults = false } =
       (await req.json()) as ApiReq
 
     // Keep history short to reduce latency and cost
@@ -390,6 +404,7 @@ export async function POST(req: NextRequest) {
           (selection ? `\n\nSELECTION:\n${JSON.stringify(selection, null, 2)}` : '') +
           `\n\nHISTORY_SNIPPET:\n` +
           JSON.stringify(shortHistory, null, 2) +
+          `\n\nACCEPT_DEFAULTS: ${acceptDefaults ? 'true' : 'false'}` +
           `\n\nUSER_REQUEST:\n` +
           prompt,
       },
