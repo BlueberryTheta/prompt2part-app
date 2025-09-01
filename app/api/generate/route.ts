@@ -93,13 +93,20 @@ function sysPromptSpecMerge() {
   return `
 You are a CAD spec editor. Merge the new user request into the existing SPEC.
 
+Goals:
+- Infer intent and set spec.part_type when obvious (e.g., "cable holder", "phone stand", "L-bracket").
+- Gather only the minimum information to produce a reasonable first model.
+
 Rules:
 - Keep units consistent. Default "mm".
 - Do not change existing geometry unless explicitly requested.
 - Resolve ellipsis/pronouns using LAST_ASSISTANT_TEXT and UI_SELECTED_FACE (e.g. "center" applies to that face).
 - IMPORTANT DEFAULT: if a cylinder references a face (base_face/face/position.reference_face) and has no "operation", set "operation":"boss".
-- If required info is missing, add "missing" and ask short, pointed "questions".
+- If required info is missing, add "missing" and ask up to 3 short, pointed "questions" with sensible defaults in parentheses.
+- Prefer concrete numbers. Suggest typical ranges where helpful.
 - NEVER output code here.
+
+For a "cable holder to be mounted on a desk", ask about 2–3 of: cable diameter (e.g., 4–6mm), number of slots (e.g., 3–5), slot spacing (e.g., 8–12mm), mount type (adhesive | screw | clamp), desk thickness (for clamp), and orientation. Populate spec.features accordingly (cube body, slots, holes) but only with fields known or assumed.
 
 Output STRICT JSON:
 {"spec": <merged spec>, "assumptions": string[], "questions": string[]}`.trim()
@@ -111,7 +118,7 @@ You are an OpenSCAD generator. Produce only valid OpenSCAD (no markdown).
 
 Rules:
 - Units: mm if units == "mm".
-- Start with named parameters.
+- Start with a clear block of named parameters (simple numeric values) for key dimensions. Use snake_case names reflecting SPEC (e.g., cable_diameter, slot_count, body_width, mount_hole_diameter).
 - Single closed manifold.
 - Combine all features in ONE top-level union()/difference().
 - Boss on a face: cylinder base ON the face (center=false), protrude OUTWARD by height, include small attach_overlap into host.
@@ -358,8 +365,11 @@ export async function POST(req: NextRequest) {
     const { prompt, history = [], spec: incomingSpec = {}, selection } =
       (await req.json()) as ApiReq
 
+    // Keep history short to reduce latency and cost
+    const shortHistory = history.slice(-8)
+
     // 1) merge spec
-    const lastAssistant = [...history].reverse().find(m => m.role === 'assistant')?.content || ''
+    const lastAssistant = [...shortHistory].reverse().find(m => m.role === 'assistant')?.content || ''
     const uiFaceHint =
       selection?.faceIndex != null
         ? `UI_SELECTED_FACE: G${selection.faceIndex}${
@@ -378,6 +388,8 @@ export async function POST(req: NextRequest) {
           lastAssistant +
           `\n\n${uiFaceHint}` +
           (selection ? `\n\nSELECTION:\n${JSON.stringify(selection, null, 2)}` : '') +
+          `\n\nHISTORY_SNIPPET:\n` +
+          JSON.stringify(shortHistory, null, 2) +
           `\n\nUSER_REQUEST:\n` +
           prompt,
       },

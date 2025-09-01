@@ -36,6 +36,8 @@ export default function DashboardPage() {
   const [resolution, setResolution] = useState(100)
   const [darkMode, setDarkMode] = useState(false)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
+  // Parsed OpenSCAD parameters (name=value;) for quick tweaking
+  const [params, setParams] = useState<Array<{ name: string; value: number }>>([])
 
   // Feature tree + selection
   const [features, setFeatures] = useState<Feature[]>([])
@@ -411,6 +413,8 @@ __root__();
     if (data?.type === 'code' && data?.code) {
       const code = data.code as string
       setResponse(code)
+      // parse parameters from new code
+      setParams(extractParamsFromCode(code))
       setCodeGenerated(true)
 
       // Render STL
@@ -453,6 +457,50 @@ __root__();
     if (myReqId === requestSeqRef.current) setLoading(false)
   }
 }
+
+  // Extract simple numeric parameters from the OpenSCAD source
+  function extractParamsFromCode(code: string): Array<{ name: string; value: number }> {
+    const out: Array<{ name: string; value: number }> = []
+    const src = (code || '').replace(/\r\n/g, '\n')
+    // heuristic: scan first ~150 lines or until the first union/difference/module
+    const lines = src.split('\n').slice(0, 150)
+    const stopRe = /\b(union\s*\(|difference\s*\(|intersection\s*\(|module\s+[A-Za-z_]\w*)/i
+    for (const line of lines) {
+      if (stopRe.test(line)) break
+      const m = line.match(/^\s*([A-Za-z_]\w*)\s*=\s*([-+]?\d*\.?\d+)\s*;\s*(?:\/\/.*)?$/)
+      if (m) {
+        const name = m[1]
+        const val = Number(m[2])
+        if (Number.isFinite(val)) out.push({ name, value: val })
+      }
+    }
+    return out
+  }
+
+  // Replace parameter values in the code by exact name matches in simple assignments
+  function applyParamsToCode(code: string, updates: Array<{ name: string; value: number }>): string {
+    if (!code) return code
+    let out = code
+    for (const { name, value } of updates) {
+      const re = new RegExp(`(^|\\n)(\\s*)${name}\\s*=\\s*([-+]?\\d*\\.?\\d+)\\s*;`, 'g')
+      out = out.replace(re, (_m, pre, indent) => `${pre}${indent}${name} = ${value};`)
+    }
+    return out
+  }
+
+  // Apply parameter edits and re-render without another AI round-trip
+  const handleApplyParams = async () => {
+    if (!response || params.length === 0) return
+    const newCode = applyParamsToCode(response, params)
+    setResponse(newCode)
+    try {
+      const url = await renderStlFromCodeStrict(newCode, resolution)
+      setStlBlobUrl(url)
+      setRenderVersion(v => v + 1)
+    } catch (e) {
+      console.error('Parameter render error:', e)
+    }
+  }
 
 
   // === Projects: Save new / Update / Load / Rename / Delete ===
