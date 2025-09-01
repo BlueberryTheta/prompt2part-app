@@ -911,7 +911,7 @@ __root__();
                             {text}
                           </button>
                         )
-                        const items: JSX.Element[] = []
+                        const items: React.ReactNode[] = []
                         if (t === 'cube') {
                           items.push(mk(`Increase height of ${label} by 5 mm.`))
                           items.push(mk(`Increase width of ${label} by 5 mm.`))
