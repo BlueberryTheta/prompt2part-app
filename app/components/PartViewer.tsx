@@ -16,6 +16,13 @@ export type Feature = {
   position?: [number, number, number]
 }
 
+type GroupPickInfo = {
+  point: THREE.Vector3
+  groupId: number
+  groupLabel?: THREE.Vector3
+  nearestVertex?: THREE.Vector3
+}
+
 type PartViewerProps = {
   stlUrl: string
   /** Optional list of model features you maintain in the app state */
@@ -124,6 +131,23 @@ function buildPlanarGroups(geometry: BufferGeometry) {
   }
 
   return { faceToGroup, groups }
+}
+
+/** Draw a simple line segment between two points without relying on drei's Line */
+function SimpleMeasureLine({ a, b, color = '#ffffff' }: { a: THREE.Vector3; b: THREE.Vector3; color?: string }) {
+  const geom = useMemo(() => {
+    const g = new THREE.BufferGeometry()
+    const arr = new Float32Array([a.x, a.y, a.z, b.x, b.y, b.z])
+    g.setAttribute('position', new THREE.BufferAttribute(arr, 3))
+    return g
+  }, [a, b])
+  useEffect(() => () => geom.dispose(), [geom])
+  return (
+    <line>
+      <primitive object={geom} attach="geometry" />
+      <lineBasicMaterial attach="material" color={color} />
+    </line>
+  )
 }
 
 /** Build a sub-geometry (copy of selected triangles only) for highlight overlay */
@@ -252,7 +276,7 @@ function STLModel({
 }: {
   stlUrl: string
   autoRotate: boolean
-  onGroupPick: (info: { point: THREE.Vector3; groupId: number }) => void
+  onGroupPick: (info: GroupPickInfo) => void
   selectedGroupId?: number | null
   selectedPoint?: THREE.Vector3 | null
 }) {
@@ -410,7 +434,10 @@ function STLModel({
           e.stopPropagation()
           if (!faceToGroup || e.faceIndex == null) return
           const gid = faceToGroup[e.faceIndex]
-          if (gid >= 0) onGroupPick({ point: e.point.clone(), groupId: gid })
+          if (gid >= 0) onGroupPick({
+            point: e.point.clone(),
+            groupId: gid,
+          })
         }}
       />
 
@@ -454,6 +481,8 @@ export default function PartViewer({
   const [showGrid, setShowGrid] = useState<boolean>(false)
   const [measureMode, setMeasureMode] = useState<boolean>(false)
   const [measurePts, setMeasurePts] = useState<THREE.Vector3[]>([])
+  const [snapMode, setSnapMode] = useState<'none'|'face'|'vertex'>('none')
+  const [units, setUnits] = useState<'mm'|'inch'>('mm')
 
   // feature selection within the viewer (list click)
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
@@ -528,6 +557,15 @@ export default function PartViewer({
         >
           {measureMode ? 'Exit Measure' : 'Measure'}
         </button>
+        <select className="px-1 py-1 rounded bg-gray-900 text-white text-xs shadow" value={snapMode} onChange={e => setSnapMode(e.target.value as any)}>
+          <option value="none">Snap: None</option>
+          <option value="face">Snap: Face</option>
+          <option value="vertex">Snap: Vertex</option>
+        </select>
+        <select className="px-1 py-1 rounded bg-gray-900 text-white text-xs shadow" value={units} onChange={e => setUnits(e.target.value as any)}>
+          <option value="mm">mm</option>
+          <option value="inch">inch</option>
+        </select>
       </div>
 
       {/* Canvas */}
@@ -547,12 +585,15 @@ export default function PartViewer({
             autoRotate={autoRotate}
             onGroupPick={(info) => {
               if (measureMode) {
+                const p = snapMode === 'face' && info.groupLabel ? info.groupLabel
+                  : snapMode === 'vertex' && info.nearestVertex ? info.nearestVertex
+                  : info.point
                 setMeasurePts(prev => {
-                  const next = [...prev, info.point]
+                  const next = [...prev, p.clone()]
                   return next.slice(-2)
                 })
               } else {
-                handleScenePick(info)
+                handleScenePick({ point: info.point, groupId: info.groupId })
               }
             }}
             selectedGroupId={selectedGroupId}
@@ -560,6 +601,16 @@ export default function PartViewer({
           />
           {/* Optional marker for last scene-picked face */}
           {picked && <GroupMarker position={picked.point} groupId={picked.groupId} />}
+          {measureMode && measurePts.length === 2 && (
+            <>
+              <SimpleMeasureLine a={measurePts[0]} b={measurePts[1]} color="#ffffff" />
+              <Html position={measurePts[1]} center zIndexRange={[21, 0]} transform={false} occlude={false}>
+                <div style={{ background: 'rgba(0,0,0,0.75)', color: 'white', padding: '4px 6px', borderRadius: 6, fontSize: 12 }}>
+                  {(() => { const mm = measurePts[0].distanceTo(measurePts[1]); return units === 'mm' ? `${mm.toFixed(2)} mm` : `${(mm/25.4).toFixed(3)} in`; })()}
+                </div>
+              </Html>
+            </>
+          )}
           {measureMode && measurePts.length === 2 && (
             <Html position={measurePts[1]} center zIndexRange={[21, 0]} transform={false} occlude={false}>
               <div style={{ background: 'rgba(0,0,0,0.75)', color: 'white', padding: '4px 6px', borderRadius: 6, fontSize: 12 }}>
