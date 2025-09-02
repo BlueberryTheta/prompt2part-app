@@ -81,6 +81,21 @@ type ApiReq = {
   acceptDefaults?: boolean
 }
 
+export type Adjustable = {
+  key: string
+  type: 'number' | 'enum' | 'boolean' | 'text' | 'vector3'
+  label?: string
+  unit?: 'mm' | 'inch'
+  min?: number
+  max?: number
+  step?: number
+  options?: string[]
+  required?: boolean
+  hint?: string
+  group?: string
+  order?: number
+}
+
 type ApiResp =
   | {
       type: 'answer' | 'questions' | 'code'
@@ -90,6 +105,12 @@ type ApiResp =
       questions?: string[]
       code?: string
       actions?: string[]
+      // AI-driven Quick Setup (optional)
+      objectType?: string
+      adjustables?: Adjustable[]
+      adjust_params?: Record<string, any>
+      options?: Record<string, string[]>
+      ask?: string[]
     }
   | { error: string }
 
@@ -114,8 +135,17 @@ Rules:
 If UI_SELECTED_FEATURE is present, apply the change to that feature.
 For holders/brackets/clamps/enclosures/knobs/adapters, choose 2–3 key questions with defaults; otherwise proceed with reasonable assumptions.
 
+Additionally, you MUST return an AI-driven Quick Setup schema with ONLY the parameters that matter now:
+- objectType: normalized short type for the current object (e.g., "cube", "cylinder", "cable_holder").
+- params: a flat map of current parameter values used by the geometry (numbers/strings/booleans or nested objects).
+- adjustables: an array of fields the user may edit NOW, each with: { key, type, label?, unit?, min?, max?, step?, options? }.
+  - key uses dot-paths for nested (e.g., "position.x").
+  - Include ONLY fields the user should edit now; do NOT include irrelevant defaults.
+- ask: optional short questions for ambiguous/missing values, <= 3.
+- options: optional map of enumerated choices per key.
+
 Output STRICT JSON:
-{"spec": <merged spec>, "assumptions": string[], "questions": string[]}`.trim()
+{"spec": <merged spec>, "assumptions": string[], "questions": string[], "objectType": string, "params": object, "adjustables": Array, "ask": string[], "options": object}`.trim()
 }
 
 function sysPromptCode() {
@@ -438,12 +468,22 @@ export async function POST(req: NextRequest) {
     let assumptions: string[] = []
     let missing: string[] = []
     let questions: string[] = []
+    let objectType: string | undefined
+    let adjustables: any[] | undefined
+    let adjustParams: Record<string, any> | undefined
+    let adjustAsk: string[] | undefined
+    let adjustOptions: Record<string, string[]> | undefined
     try {
       const parsed = safeParseJson(mergedRaw)
       mergedSpec = parsed.spec || incomingSpec
       assumptions = parsed.assumptions || []
       missing = parsed.missing || []
       questions = parsed.questions || []
+      objectType = parsed.objectType || parsed.part_type || undefined
+      adjustables = Array.isArray(parsed.adjustables) ? parsed.adjustables : undefined
+      adjustParams = parsed.params || undefined
+      adjustAsk = Array.isArray(parsed.ask) ? parsed.ask : undefined
+      adjustOptions = parsed.options || undefined
     } catch (e: any) {
       console.error('Spec merge parse error:', e?.message, mergedRaw)
       return NextResponse.json({ error: 'Spec merge failed: invalid JSON' } as ApiResp, { status: 500 })
@@ -470,6 +510,11 @@ export async function POST(req: NextRequest) {
         spec: mergedSpec,
         assumptions,
         questions,
+        objectType,
+        adjustables,
+        adjust_params: adjustParams,
+        options: adjustOptions,
+        ask: adjustAsk,
         actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults'],
       } satisfies ApiResp)
     }
@@ -520,6 +565,11 @@ export async function POST(req: NextRequest) {
       spec: mergedSpec,
       assumptions,
       code,
+      objectType,
+      adjustables,
+      adjust_params: adjustParams,
+      options: adjustOptions,
+      ask: adjustAsk,
       actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults', 'generated_code'],
     } satisfies ApiResp)
   } catch (err: any) {

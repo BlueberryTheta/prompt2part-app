@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
+import QuickSetup, { Adjustable as QSAdjustable } from '@/app/components/QuickSetup'
 import { supabase } from '@/lib/supabaseClient'
 import { Spec } from '../api/generate/route'
 
@@ -112,6 +113,26 @@ export default function DashboardPage() {
     }
     fetchData()
   }, [router])
+
+  // === Helper to build a concise prompt from AI adjustables ===
+  function buildApplyPromptFromAdjustables(objectType?: string, paramsObj?: Record<string, any>, fields?: QSAdjustable[]) {
+    const obj = paramsObj || {}
+    const keys = (fields || []).map(f => f.key)
+    const subset: Record<string, any> = {}
+    for (const k of keys) {
+      // support dot paths by copying nested values literally as "k: value" for the AI
+      const parts = k.split('.')
+      let cur: any = obj
+      for (const p of parts) {
+        cur = cur?.[p]
+        if (cur == null) break
+      }
+      if (cur !== undefined) subset[k] = cur
+    }
+    const title = objectType ? `the current ${objectType}` : 'the current object'
+    return `Apply these parameter values to ${title}, updating the model accordingly. Do not introduce unrelated defaults.\n` +
+      JSON.stringify(subset, null, 2)
+  }
 
 
   // === Prompt helper (kept for reference paths you already use) ===
@@ -368,6 +389,12 @@ __root__();
   const [spec, setSpec] = useState<Spec>({ units: 'mm' })
   const [assumptions, setAssumptions] = useState<string[]>([])
   const [questions, setQuestions] = useState<string[]>([])
+  // AI-driven Quick Setup state
+  const [aiObjectType, setAiObjectType] = useState<string | undefined>(undefined)
+  const [aiAdjustables, setAiAdjustables] = useState<QSAdjustable[] | undefined>(undefined)
+  const [aiParams, setAiParams] = useState<Record<string, any>>({})
+  const [aiAsk, setAiAsk] = useState<string[] | undefined>(undefined)
+  const [aiOptions, setAiOptions] = useState<Record<string, string[]> | undefined>(undefined)
   // Template wizard fields (e.g., cable holder)
   const [wizCableDiameter, setWizCableDiameter] = useState<number>(5)
   const [wizSlotCount, setWizSlotCount] = useState<number>(4)
@@ -447,6 +474,12 @@ __root__();
     setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
     setAssumptions(data?.assumptions || [])
     setQuestions(data?.questions || [])
+    // Capture AI-driven Quick Setup schema when provided
+    setAiObjectType(data?.objectType)
+    setAiAdjustables(data?.adjustables)
+    setAiParams(data?.adjust_params || {})
+    setAiAsk(data?.ask)
+    setAiOptions(data?.options)
 
     // ✅ ALWAYS keep SPEC in sync with the server, even for `type: "questions"`
     if (data?.spec) {
@@ -767,6 +800,24 @@ __root__();
           </select>
         </div>
 
+        {/* AI-Driven Quick Setup (adaptive, no defaults) */}
+        <div
+          className={`shadow-md rounded-lg p-4 border transition ${
+            darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+          }`}
+        >
+          <QuickSetup
+            objectType={aiObjectType}
+            adjustables={aiAdjustables}
+            params={aiParams}
+            ask={aiAsk}
+            options={aiOptions}
+            dark={darkMode}
+            onParamsChange={setAiParams}
+            onApply={() => handleSubmit(buildApplyPromptFromAdjustables(aiObjectType, aiParams, aiAdjustables))}
+          />
+        </div>
+
         {/* Saved Projects */}
         <div
           className={`shadow-md rounded-lg p-4 border transition ${
@@ -829,11 +880,11 @@ __root__();
                   }`}
                 >
                   <strong>{isUser ? 'You' : 'AI'}:</strong>{' '}
-                  <span className="whitespace-pre-wrap">{msg.content}</span>
-                </div>
-              )
-            })}
-          </div>
+          <span className="whitespace-pre-wrap">{msg.content}</span>
+        </div>
+      )
+    })}
+  </div>
 
           <textarea
             className={`border px-3 py-2 w-full rounded transition placeholder:opacity-80 ${
@@ -873,6 +924,7 @@ __root__();
 
           {/* Template wizard: suggest quick form for common parts */}
           {(() => {
+            if (aiAdjustables && (aiAdjustables.length || 0) > 0) return null
             const t = String((spec as any)?.part_type || '').toLowerCase()
             const isCableHolder = t.includes('cable') && (t.includes('holder') || t.includes('clip'))
             const isBracket = t.includes('bracket')
