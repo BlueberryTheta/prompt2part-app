@@ -800,23 +800,7 @@ __root__();
           </select>
         </div>
 
-        {/* AI-Driven Quick Setup (adaptive, no defaults) */}
-        <div
-          className={`shadow-md rounded-lg p-4 border transition ${
-            darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
-          }`}
-        >
-          <QuickSetup
-            objectType={aiObjectType}
-            adjustables={aiAdjustables}
-            params={aiParams}
-            ask={aiAsk}
-            options={aiOptions}
-            dark={darkMode}
-            onParamsChange={setAiParams}
-            onApply={() => handleSubmit(buildApplyPromptFromAdjustables(aiObjectType, aiParams, aiAdjustables))}
-          />
-        </div>
+        {/* AI-driven Quick Setup is rendered below the chat textarea */}
 
         {/* Saved Projects */}
         <div
@@ -921,6 +905,20 @@ __root__();
               )}
             </div>
           )}
+
+          {/* AI-Driven Quick Setup (fixed below the text box) */}
+          <div className="mt-3">
+            <QuickSetup
+              objectType={aiObjectType}
+              adjustables={aiAdjustables}
+              params={aiParams}
+              ask={aiAsk}
+              options={aiOptions}
+              dark={darkMode}
+              onParamsChange={setAiParams}
+              onApply={() => handleSubmit(buildApplyPromptFromAdjustables(aiObjectType, aiParams, aiAdjustables))}
+            />
+          </div>
 
           {/* Template wizard: suggest quick form for common parts */}
           {(() => {

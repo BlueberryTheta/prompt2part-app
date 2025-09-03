@@ -494,6 +494,23 @@ export async function POST(req: NextRequest) {
     mergedSpec = normalizeFacesInSpec(mergedSpec)
     mergedSpec = ensureFeatureIds(mergedSpec)
 
+    // If the model did not provide adjustables, ask it for a minimal adaptive schema now (AI-only, no defaults)
+    if (!adjustables || adjustables.length === 0) {
+      try {
+        const schemaMsg: Msg[] = [
+          { role: 'system', content: `You are a UI schema generator. Return STRICT JSON with keys: { "objectType": string, "params": object, "adjustables": Array, "ask": string[], "options": object }. Include ONLY the parameters the user should edit now for the current object. Use dot-paths for nested keys (e.g., position.x). Do not invent irrelevant defaults. Keep adjustables concise and relevant.` },
+          { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}\n\nIf applicable, base the objectType on the main feature or part_type.` },
+        ]
+        const schemaRaw = await openai(schemaMsg, 700, 0.2)
+        const schema = safeParseJson(schemaRaw)
+        objectType = schema.objectType || objectType
+        adjustables = Array.isArray(schema.adjustables) ? schema.adjustables : adjustables
+        adjustParams = schema.params || adjustParams
+        adjustAsk = Array.isArray(schema.ask) ? schema.ask : adjustAsk
+        adjustOptions = schema.options || adjustOptions
+      } catch {}
+    }
+
     // Ask if still unclear
     if (missing.length > 0 || questions.length > 0) {
       const msg = [
