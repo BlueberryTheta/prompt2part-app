@@ -40,13 +40,12 @@ export default function DashboardPage() {
   // Parsed OpenSCAD parameters (name=value;) for quick tweaking
   const [params, setParams] = useState<Array<{ name: string; value: number }>>([])
 
-  // Derive Quick Setup fields from current code parameters (works for any object)
-  const qsAdjustables = useMemo(() => params.map(p => ({ key: p.name, type: 'number' as const, label: p.name })), [params])
-  const qsParamsObj = useMemo(() => {
-    const obj: Record<string, any> = {}
-    for (const p of params) obj[p.name] = p.value
-    return obj
-  }, [params])
+  // AI-driven Quick Setup state
+  const [aiObjectType, setAiObjectType] = useState<string | undefined>(undefined)
+  const [aiAdjustables, setAiAdjustables] = useState<any[] | undefined>(undefined)
+  const [aiParams, setAiParams] = useState<Record<string, any>>({})
+  const [aiAsk, setAiAsk] = useState<string[] | undefined>(undefined)
+  const [aiOptions, setAiOptions] = useState<Record<string, string[]> | undefined>(undefined)
 
   // Feature tree + selection
   const [features, setFeatures] = useState<Feature[]>([])
@@ -698,6 +697,10 @@ __root__();
     link.click()
   }
 
+  function buildApplyPromptFromAdjustables(aiObjectType: string | undefined, aiParams: Record<string, any>, aiAdjustables: any[] | undefined): string | undefined {
+    throw new Error('Function not implemented.')
+  }
+
   // === UI ===
   return (
     <div
@@ -862,17 +865,18 @@ __root__();
             </div>
           )}
 
-          {/* Quick Setup (code-parameter driven, always available when code has params) */}
+          {/* Quick Setup (AI-driven for the current feature only) */}
           <div className="mt-3">
             <QuickSetup
-              params={qsParamsObj}
-              adjustables={qsAdjustables}
+              objectType={aiObjectType}
+              params={aiParams}
+              adjustables={aiAdjustables}
+              ask={aiAsk}
+              options={aiOptions}
               dark={darkMode}
-              onParamsChange={(next) =>
-                setParams(prev => prev.map(p => ({ name: p.name, value: (next[p.name] ?? p.value) })))}
+              onParamsChange={(next) => setAiParams(next)}
               onApply={() => handleSubmit(
-                'Apply these parameter values to the current object. Do not introduce unrelated defaults.\n' +
-                JSON.stringify(qsParamsObj, null, 2)
+                buildApplyPromptFromAdjustables(aiObjectType, aiParams, aiAdjustables)
               )}
             />
           </div>

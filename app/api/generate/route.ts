@@ -378,7 +378,7 @@ function fixMissingSemicolonsNearBraces(code: string) {
 }
 
 // Build a minimal, data-driven adjustable set from the current spec (no registry, no defaults)
-function buildAdjustablesFromSpec(spec: Spec): {
+function buildAdjustablesFromSpec(spec: Spec, featureId?: string): {
   objectType?: string
   adjustables: Adjustable[]
   params: Record<string, any>
@@ -403,7 +403,13 @@ function buildAdjustablesFromSpec(spec: Spec): {
 
   // Prefer the most recently added feature (last), else first
   const feats = Array.isArray(spec.features) ? spec.features : []
-  const feature: any = feats.length > 0 ? feats[feats.length - 1] : null
+  let feature: any = null
+  if (featureId) {
+    feature = feats.find((f: any) => (f?.feature_id || f?.id) === featureId) || null
+  }
+  if (!feature) {
+    feature = feats.length > 0 ? feats[feats.length - 1] : null
+  }
   if (feature) flattenNumeric(feature)
   // Also include overall dimensions if present
   if (spec.overall) flattenNumeric(spec.overall, 'overall')
@@ -552,7 +558,7 @@ export async function POST(req: NextRequest) {
 
     // Final safety: if still no adjustables, derive directly from the current spec (no registry, purely data-driven)
     if (!adjustables || adjustables.length === 0) {
-      const derived = buildAdjustablesFromSpec(mergedSpec)
+      const derived = buildAdjustablesFromSpec(mergedSpec, selection?.featureId)
       objectType = objectType || derived.objectType
       adjustables = derived.adjustables
       adjustParams = derived.params
