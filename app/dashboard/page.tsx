@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo, JSX } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
+import QuickSetup from '@/app/components/QuickSetup'
 import { supabase } from '@/lib/supabaseClient'
 import { Spec } from '../api/generate/route'
 
@@ -38,6 +39,14 @@ export default function DashboardPage() {
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
   // Parsed OpenSCAD parameters (name=value;) for quick tweaking
   const [params, setParams] = useState<Array<{ name: string; value: number }>>([])
+
+  // Derive Quick Setup fields from current code parameters (works for any object)
+  const qsAdjustables = useMemo(() => params.map(p => ({ key: p.name, type: 'number' as const, label: p.name })), [params])
+  const qsParamsObj = useMemo(() => {
+    const obj: Record<string, any> = {}
+    for (const p of params) obj[p.name] = p.value
+    return obj
+  }, [params])
 
   // Feature tree + selection
   const [features, setFeatures] = useState<Feature[]>([])
@@ -852,6 +861,21 @@ __root__();
               )}
             </div>
           )}
+
+          {/* Quick Setup (code-parameter driven, always available when code has params) */}
+          <div className="mt-3">
+            <QuickSetup
+              params={qsParamsObj}
+              adjustables={qsAdjustables}
+              dark={darkMode}
+              onParamsChange={(next) =>
+                setParams(prev => prev.map(p => ({ name: p.name, value: (next[p.name] ?? p.value) })))}
+              onApply={() => handleSubmit(
+                'Apply these parameter values to the current object. Do not introduce unrelated defaults.\n' +
+                JSON.stringify(qsParamsObj, null, 2)
+              )}
+            />
+          </div>
 
           {/* Template wizard: suggest quick form for common parts */}
           {(() => {
