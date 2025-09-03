@@ -1,9 +1,8 @@
 'use client'
 
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useMemo, JSX } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
-import QuickSetup, { Adjustable as QSAdjustable } from '@/app/components/QuickSetup'
 import { supabase } from '@/lib/supabaseClient'
 import { Spec } from '../api/generate/route'
 
@@ -113,26 +112,6 @@ export default function DashboardPage() {
     }
     fetchData()
   }, [router])
-
-  // === Helper to build a concise prompt from AI adjustables ===
-  function buildApplyPromptFromAdjustables(objectType?: string, paramsObj?: Record<string, any>, fields?: QSAdjustable[]) {
-    const obj = paramsObj || {}
-    const keys = (fields || []).map(f => f.key)
-    const subset: Record<string, any> = {}
-    for (const k of keys) {
-      // support dot paths by copying nested values literally as "k: value" for the AI
-      const parts = k.split('.')
-      let cur: any = obj
-      for (const p of parts) {
-        cur = cur?.[p]
-        if (cur == null) break
-      }
-      if (cur !== undefined) subset[k] = cur
-    }
-    const title = objectType ? `the current ${objectType}` : 'the current object'
-    return `Apply these parameter values to ${title}, updating the model accordingly. Do not introduce unrelated defaults.\n` +
-      JSON.stringify(subset, null, 2)
-  }
 
 
   // === Prompt helper (kept for reference paths you already use) ===
@@ -344,7 +323,7 @@ __root__();
     typeCounts.set(type, next)
 
     const prettyType = type.charAt(0).toUpperCase() + type.slice(1)
-    const id = (f?.feature_id || f?.id || `${type}-${next}`) as string
+    const id = `${type}-${next}`
 
     // Try to pull a face id from several possible fields:
     // base_face, face, faceIndex, position.reference_face, position.face
@@ -389,34 +368,12 @@ __root__();
   const [spec, setSpec] = useState<Spec>({ units: 'mm' })
   const [assumptions, setAssumptions] = useState<string[]>([])
   const [questions, setQuestions] = useState<string[]>([])
-  // AI-driven Quick Setup state
-  const [aiObjectType, setAiObjectType] = useState<string | undefined>(undefined)
-  const [aiAdjustables, setAiAdjustables] = useState<QSAdjustable[] | undefined>(undefined)
-  const [aiParams, setAiParams] = useState<Record<string, any>>({})
-  const [aiAsk, setAiAsk] = useState<string[] | undefined>(undefined)
-  const [aiOptions, setAiOptions] = useState<Record<string, string[]> | undefined>(undefined)
   // Template wizard fields (e.g., cable holder)
   const [wizCableDiameter, setWizCableDiameter] = useState<number>(5)
   const [wizSlotCount, setWizSlotCount] = useState<number>(4)
   const [wizSlotSpacing, setWizSlotSpacing] = useState<number>(10)
   const [wizMount, setWizMount] = useState<'adhesive'|'screw'|'clamp'>('adhesive')
   const [wizDeskThickness, setWizDeskThickness] = useState<number>(20)
-  // Bracket quick params
-  const [wizBracketLeg, setWizBracketLeg] = useState<number>(40)
-  const [wizBracketWidth, setWizBracketWidth] = useState<number>(20)
-  const [wizBracketThk, setWizBracketThk] = useState<number>(4)
-  const [wizBracketHoleDia, setWizBracketHoleDia] = useState<number>(4)
-  const [wizBracketHoleSpace, setWizBracketHoleSpace] = useState<number>(20)
-  // Clamp quick params
-  const [wizClampJawWidth, setWizClampJawWidth] = useState<number>(30)
-  const [wizClampJawDepth, setWizClampJawDepth] = useState<number>(15)
-  const [wizClampScrewDia, setWizClampScrewDia] = useState<number>(5)
-  // Enclosure quick params
-  const [wizEnclLen, setWizEnclLen] = useState<number>(80)
-  const [wizEnclWid, setWizEnclWid] = useState<number>(50)
-  const [wizEnclH, setWizEnclH] = useState<number>(30)
-  const [wizEnclWall, setWizEnclWall] = useState<number>(2.4)
-  const [wizEnclFillet, setWizEnclFillet] = useState<number>(3)
   const [wizardDismissed, setWizardDismissed] = useState(false)
 
   // Heuristic: derive a reasonable answer text from a model question
@@ -460,8 +417,6 @@ __root__();
               point: lastScenePick.point,
             }
           : undefined,
-        // If a feature is selected in the UI, include its id to help the server target the change
-        ...(selectedFeatureId ? { selection: { ...(lastScenePick ? { faceIndex: lastScenePick.groupId, point: lastScenePick.point } : {}), featureId: selectedFeatureId } } : {}),
         acceptDefaults: !!options?.acceptDefaults,
       }),
       cache: 'no-store',
@@ -474,12 +429,6 @@ __root__();
     setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
     setAssumptions(data?.assumptions || [])
     setQuestions(data?.questions || [])
-    // Capture AI-driven Quick Setup schema when provided
-    setAiObjectType(data?.objectType)
-    setAiAdjustables(data?.adjustables)
-    setAiParams(data?.adjust_params || {})
-    setAiAsk(data?.ask)
-    setAiOptions(data?.options)
 
     // ✅ ALWAYS keep SPEC in sync with the server, even for `type: "questions"`
     if (data?.spec) {
@@ -800,8 +749,6 @@ __root__();
           </select>
         </div>
 
-        {/* AI-driven Quick Setup is rendered below the chat textarea */}
-
         {/* Saved Projects */}
         <div
           className={`shadow-md rounded-lg p-4 border transition ${
@@ -864,11 +811,11 @@ __root__();
                   }`}
                 >
                   <strong>{isUser ? 'You' : 'AI'}:</strong>{' '}
-          <span className="whitespace-pre-wrap">{msg.content}</span>
-        </div>
-      )
-    })}
-  </div>
+                  <span className="whitespace-pre-wrap">{msg.content}</span>
+                </div>
+              )
+            })}
+          </div>
 
           <textarea
             className={`border px-3 py-2 w-full rounded transition placeholder:opacity-80 ${
@@ -906,28 +853,12 @@ __root__();
             </div>
           )}
 
-          {/* AI-Driven Quick Setup (fixed below the text box) */}
-          <div className="mt-3">
-            <QuickSetup
-              objectType={aiObjectType}
-              adjustables={aiAdjustables}
-              params={aiParams}
-              ask={aiAsk}
-              options={aiOptions}
-              dark={darkMode}
-              onParamsChange={setAiParams}
-              onApply={() => handleSubmit(buildApplyPromptFromAdjustables(aiObjectType, aiParams, aiAdjustables))}
-            />
-          </div>
-
           {/* Template wizard: suggest quick form for common parts */}
           {(() => {
-            if (aiAdjustables && (aiAdjustables.length || 0) > 0) return null
             const t = String((spec as any)?.part_type || '').toLowerCase()
             const isCableHolder = t.includes('cable') && (t.includes('holder') || t.includes('clip'))
             const isBracket = t.includes('bracket')
             const isClamp = t.includes('clamp')
-            const isEnclosure = t.includes('enclosure') || t.includes('case')
             if (wizardDismissed) return null
             // Show for cable-holder style parts OR if we have any features (generic adaptive setup)
             const hasFeatures = Array.isArray((spec as any)?.features) && ((spec as any)?.features?.length || 0) > 0
@@ -965,67 +896,6 @@ __root__();
                     )}
                   </div>
                 )}
-                {isBracket && (
-                  <div className="grid grid-cols-2 gap-2 text-xs mt-2">
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Leg length (mm)</span>
-                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizBracketLeg} onChange={e=>setWizBracketLeg(Number(e.target.value))} />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Width (mm)</span>
-                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizBracketWidth} onChange={e=>setWizBracketWidth(Number(e.target.value))} />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Thickness (mm)</span>
-                      <input type="number" step="0.2" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizBracketThk} onChange={e=>setWizBracketThk(Number(e.target.value))} />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Hole Ø (mm)</span>
-                      <input type="number" step="0.5" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizBracketHoleDia} onChange={e=>setWizBracketHoleDia(Number(e.target.value))} />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Hole spacing (mm)</span>
-                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizBracketHoleSpace} onChange={e=>setWizBracketHoleSpace(Number(e.target.value))} />
-                    </label>
-                  </div>
-                )}
-
-                {isClamp && (
-                  <div className="grid grid-cols-2 gap-2 text-xs mt-2">
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Jaw width (mm)</span>
-                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizClampJawWidth} onChange={e=>setWizClampJawWidth(Number(e.target.value))} />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Jaw depth (mm)</span>
-                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizClampJawDepth} onChange={e=>setWizClampJawDepth(Number(e.target.value))} />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Screw Ø (mm)</span>
-                      <input type="number" step="0.5" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizClampScrewDia} onChange={e=>setWizClampScrewDia(Number(e.target.value))} />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Desk thickness (mm)</span>
-                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizDeskThickness} onChange={e=>setWizDeskThickness(Number(e.target.value))} />
-                    </label>
-                  </div>
-                )}
-
-                {isEnclosure && (
-                  <div className="grid grid-cols-2 gap-2 text-xs mt-2">
-                    <label className="flex flex-col gap-1"><span className="opacity-80">Length (mm)</span>
-                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizEnclLen} onChange={e=>setWizEnclLen(Number(e.target.value))} /></label>
-                    <label className="flex flex-col gap-1"><span className="opacity-80">Width (mm)</span>
-                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizEnclWid} onChange={e=>setWizEnclWid(Number(e.target.value))} /></label>
-                    <label className="flex flex-col gap-1"><span className="opacity-80">Height (mm)</span>
-                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizEnclH} onChange={e=>setWizEnclH(Number(e.target.value))} /></label>
-                    <label className="flex flex-col gap-1"><span className="opacity-80">Wall (mm)</span>
-                      <input type="number" step="0.2" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizEnclWall} onChange={e=>setWizEnclWall(Number(e.target.value))} /></label>
-                    <label className="flex flex-col gap-1"><span className="opacity-80">Fillet (mm)</span>
-                      <input type="number" step="0.5" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizEnclFillet} onChange={e=>setWizEnclFillet(Number(e.target.value))} /></label>
-                  </div>
-                )}
-
                 {/* Generic adaptive section: build quick prompts for detected features */}
                 {hasFeatures && (
                   <div className="mt-2 space-y-2">
@@ -1039,7 +909,7 @@ __root__();
                             {text}
                           </button>
                         )
-                        const items: React.ReactNode[] = []
+                        const items: JSX.Element[] = []
                         if (t === 'cube') {
                           items.push(mk(`Increase height of ${label} by 5 mm.`))
                           items.push(mk(`Increase width of ${label} by 5 mm.`))
@@ -1061,7 +931,9 @@ __root__();
                     </div>
                   </div>
                 )}
-                {/* Contextual hint removed; panel now adapts with inputs above. */}
+                {(isBracket || isClamp) && (
+                  <div className="text-xs opacity-80">Fill in missing prompts above; this quick setup prioritizes cable holders.</div>
+                )}
                 <div className="mt-2 flex justify-end">
                   <button
                     type="button"
@@ -1071,14 +943,9 @@ __root__();
                         parts.push(`Cable holder: cable diameter ${wizCableDiameter}mm, ${wizSlotCount} slots, spacing ${wizSlotSpacing}mm`)
                         parts.push(`Mount: ${wizMount}${wizMount==='clamp' ? ` (desk thickness ${wizDeskThickness}mm)` : ''}`)
                       } else if (isBracket) {
-                        parts.push(`L-bracket: leg ${wizBracketLeg}mm, width ${wizBracketWidth}mm, thickness ${wizBracketThk}mm`)
-                        parts.push(`Mount holes: diameter ${wizBracketHoleDia}mm, spacing ${wizBracketHoleSpace}mm`)
+                        parts.push('Use sensible defaults for an L-bracket and confirm key dimensions.')
                       } else if (isClamp) {
-                        parts.push(`Clamp: jaw width ${wizClampJawWidth}mm, jaw depth ${wizClampJawDepth}mm, screw diameter ${wizClampScrewDia}mm`)
-                        parts.push(`Desk thickness ${wizDeskThickness}mm`)
-                      } else if (isEnclosure) {
-                        parts.push(`Enclosure: length ${wizEnclLen}mm, width ${wizEnclWid}mm, height ${wizEnclH}mm`)
-                        parts.push(`Wall ${wizEnclWall}mm, fillet ${wizEnclFillet}mm`)
+                        parts.push('Use sensible defaults for a simple clamp and ask for jaw width if missing.')
                       }
                       handleSubmit(parts.join('. ') + '.')
                       setWizardDismissed(true)
