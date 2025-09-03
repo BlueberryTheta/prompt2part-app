@@ -377,6 +377,45 @@ function fixMissingSemicolonsNearBraces(code: string) {
   return out;
 }
 
+// Build a minimal, data-driven adjustable set from the current spec (no registry, no defaults)
+function buildAdjustablesFromSpec(spec: Spec): {
+  objectType?: string
+  adjustables: Adjustable[]
+  params: Record<string, any>
+} {
+  const outParams: Record<string, any> = {}
+  const adjustables: Adjustable[] = []
+  if (!spec) return { objectType: undefined, adjustables, params: outParams }
+
+  // Helper to flatten numeric fields into dot-keys
+  const flattenNumeric = (obj: any, base = '') => {
+    if (!obj || typeof obj !== 'object') return
+    for (const k of Object.keys(obj)) {
+      const v = (obj as any)[k]
+      const path = base ? `${base}.${k}` : k
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        outParams[path] = v
+      } else if (v && typeof v === 'object') {
+        flattenNumeric(v, path)
+      }
+    }
+  }
+
+  // Prefer the most recently added feature (last), else first
+  const feats = Array.isArray(spec.features) ? spec.features : []
+  const feature: any = feats.length > 0 ? feats[feats.length - 1] : null
+  if (feature) flattenNumeric(feature)
+  // Also include overall dimensions if present
+  if (spec.overall) flattenNumeric(spec.overall, 'overall')
+
+  for (const key of Object.keys(outParams)) {
+    adjustables.push({ key, type: 'number', label: key })
+  }
+
+  const objectType = (feature?.type as string) || spec.part_type
+  return { objectType, adjustables, params: outParams }
+}
+
 // Heal broken empty/stray call endings like: name(} ); or name()}
 function fixBrokenEmptyCalls(code: string) {
   let out = code
@@ -509,6 +548,14 @@ export async function POST(req: NextRequest) {
         adjustAsk = Array.isArray(schema.ask) ? schema.ask : adjustAsk
         adjustOptions = schema.options || adjustOptions
       } catch {}
+    }
+
+    // Final safety: if still no adjustables, derive directly from the current spec (no registry, purely data-driven)
+    if (!adjustables || adjustables.length === 0) {
+      const derived = buildAdjustablesFromSpec(mergedSpec)
+      objectType = objectType || derived.objectType
+      adjustables = derived.adjustables
+      adjustParams = derived.params
     }
 
     // Ask if still unclear
