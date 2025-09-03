@@ -55,7 +55,8 @@ type QuickSetupProps = {
 export default function QuickSetup({ objectType, adjustables, params, ask, options, dark, onParamsChange, onApply }: QuickSetupProps) {
   const fields = useMemo(() => {
     const list = Array.isArray(adjustables) ? [...adjustables] : []
-    return list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    const filtered = list.filter((f) => f && typeof f.key === 'string' && f.key.length > 0)
+    return filtered.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
   }, [adjustables])
 
   if (!fields || fields.length === 0) {
@@ -78,6 +79,7 @@ export default function QuickSetup({ objectType, adjustables, params, ask, optio
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {fields.map((f) => {
+          if (!f || typeof f.key !== 'string') return null
           const label = f.label || f.key
           const val = getByPath(params, f.key)
           const commonClass = `px-2 py-1 rounded border ${dark ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`
@@ -142,4 +144,3 @@ export default function QuickSetup({ objectType, adjustables, params, ask, optio
     </div>
   )
 }
-

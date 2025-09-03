@@ -441,8 +441,8 @@ __root__();
     setQuestions(data?.questions || [])
     // Capture AI-driven Quick Setup schema when provided
     setAiObjectType(data?.objectType)
-    setAiAdjustables(data?.adjustables)
-    setAiParams(data?.adjust_params || {})
+    setAiAdjustables(Array.isArray(data?.adjustables) ? data.adjustables.filter((f:any)=>f && typeof f.key==='string' && f.key.length>0) : [])
+    setAiParams((data?.adjust_params && typeof data.adjust_params === 'object') ? data.adjust_params : {})
     setAiAsk(data?.ask)
     setAiOptions(data?.options)
 
