@@ -419,12 +419,14 @@ __root__();
         prompt: promptToSend,
         history: baseHistory,
         spec, // send our current spec
-        selection: lastScenePick
-          ? {
-              faceIndex: lastScenePick.groupId,
-              point: lastScenePick.point,
-            }
-          : undefined,
+        selection: (
+          lastScenePick || selectedFeatureId
+            ? {
+                ...(lastScenePick ? { faceIndex: lastScenePick.groupId, point: lastScenePick.point } : {}),
+                ...(selectedFeatureId ? { featureId: selectedFeatureId } : {}),
+              }
+            : undefined
+        ),
         acceptDefaults: !!options?.acceptDefaults,
       }),
       cache: 'no-store',
@@ -437,6 +439,12 @@ __root__();
     setHistory([...baseHistory, { role: 'assistant', content: assistantText }])
     setAssumptions(data?.assumptions || [])
     setQuestions(data?.questions || [])
+    // Capture AI-driven Quick Setup schema when provided
+    setAiObjectType(data?.objectType)
+    setAiAdjustables(data?.adjustables)
+    setAiParams(data?.adjust_params || {})
+    setAiAsk(data?.ask)
+    setAiOptions(data?.options)
 
     // ✅ ALWAYS keep SPEC in sync with the server, even for `type: "questions"`
     if (data?.spec) {
