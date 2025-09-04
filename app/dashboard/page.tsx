@@ -171,6 +171,19 @@ export default function DashboardPage() {
   }
   // Normalize line endings & strip odd BOMs
   const clean = code.replace(/\r\n/g, '\n').replace(/^\uFEFF/, '')
+
+  // Sanitize OpenSCAD on the server before wrapping with $fn
+  let sanitized = clean
+  try {
+    const sres = await fetch('/api/sanitize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: clean }),
+      cache: 'no-store',
+    })
+    const sj = await sres.json()
+    if (sres.ok && typeof sj?.code === 'string') sanitized = sj.code
+  } catch {}
   const cacheKey = `${res}:${hash(clean)}`
   const cached = stlCacheRef.current.get(cacheKey)
   if (cached) {
@@ -180,7 +193,7 @@ export default function DashboardPage() {
   const wrapped = `
 $fn = ${res};
 module __root__() {
-${clean}
+${sanitized}
 }
 __root__();
 `.trim() + '\n'

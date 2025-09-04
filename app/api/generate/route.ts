@@ -432,7 +432,7 @@ function fixBrokenEmptyCalls(code: string) {
   return out
 }
 
-function sanitizeOpenSCAD(rawish: string) {
+export function sanitizeOpenSCAD(rawish: string) {
   let raw = (rawish || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').trim();
 
   // Strip fences if present
