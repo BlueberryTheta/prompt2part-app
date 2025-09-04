@@ -398,13 +398,7 @@ __root__();
   const [spec, setSpec] = useState<Spec>({ units: 'mm' })
   const [assumptions, setAssumptions] = useState<string[]>([])
   const [questions, setQuestions] = useState<string[]>([])
-  // Template wizard fields (e.g., cable holder)
-  const [wizCableDiameter, setWizCableDiameter] = useState<number>(5)
-  const [wizSlotCount, setWizSlotCount] = useState<number>(4)
-  const [wizSlotSpacing, setWizSlotSpacing] = useState<number>(10)
-  const [wizMount, setWizMount] = useState<'adhesive'|'screw'|'clamp'>('adhesive')
-  const [wizDeskThickness, setWizDeskThickness] = useState<number>(20)
-  const [wizardDismissed, setWizardDismissed] = useState(false)
+  // Removed legacy template wizard state
 
   // Heuristic: derive a reasonable answer text from a model question
   function suggestAnswerFromQuestion(q: string): string {
@@ -471,7 +465,6 @@ __root__();
     // ✅ ALWAYS keep SPEC in sync with the server, even for `type: "questions"`
     if (data?.spec) {
       setSpec(data.spec as Spec)
-      setWizardDismissed(false)
     }
 
     // Proceed to STL + (then) features only when we actually have code
@@ -937,175 +930,14 @@ __root__();
               )}
             />
           </div>
-
-          {/* Template wizard: suggest quick form for common parts */}
-          {(() => {
-            const t = String((spec as any)?.part_type || '').toLowerCase()
-            const isCableHolder = t.includes('cable') && (t.includes('holder') || t.includes('clip'))
-            const isBracket = t.includes('bracket')
-            const isClamp = t.includes('clamp')
-            if (wizardDismissed) return null
-            // Show for cable-holder style parts OR if we have any features (generic adaptive setup)
-            const hasFeatures = Array.isArray((spec as any)?.features) && ((spec as any)?.features?.length || 0) > 0
-            if (!isCableHolder && !isBracket && !isClamp && !hasFeatures) return null
-            return (
-              <div className={`mt-3 p-3 rounded border ${darkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'}`}>
-                <div className="font-semibold text-sm mb-2">Quick Setup</div>
-                {isCableHolder && (
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Cable diameter (mm)</span>
-                      <input type="number" step="0.5" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizCableDiameter} onChange={e=>setWizCableDiameter(Number(e.target.value))} />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Slots</span>
-                      <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizSlotCount} onChange={e=>setWizSlotCount(Number(e.target.value))} />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Slot spacing (mm)</span>
-                      <input type="number" step="0.5" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizSlotSpacing} onChange={e=>setWizSlotSpacing(Number(e.target.value))} />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="opacity-80">Mount</span>
-                      <select className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizMount} onChange={e=>setWizMount(e.target.value as any)}>
-                        <option value="adhesive">Adhesive</option>
-                        <option value="screw">Screw</option>
-                        <option value="clamp">Clamp</option>
-                      </select>
-                    </label>
-                    {wizMount === 'clamp' && (
-                      <label className="flex flex-col gap-1">
-                        <span className="opacity-80">Desk thickness (mm)</span>
-                        <input type="number" step="1" className={`px-2 py-1 rounded border ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-400 text-gray-900'}`} value={wizDeskThickness} onChange={e=>setWizDeskThickness(Number(e.target.value))} />
-                      </label>
-                    )}
-                  </div>
-                )}
-                {/* Generic adaptive section: build quick prompts for detected features */}
-                {hasFeatures && (
-                  <div className="mt-2 space-y-2">
-                    <div className="text-xs opacity-80">Adaptive suggestions</div>
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      {Array.from(((spec as any)?.features as any[]) || []).slice(0, 4).map((f: any, idx: number) => {
-                        const t = String(f?.type || 'feature').toLowerCase()
-                        const label = (f?.label || t.charAt(0).toUpperCase() + t.slice(1)) + (idx+1)
-                        const mk = (text: string) => (
-                          <button key={`${t}-${idx}-${text}`} type="button" onClick={() => handleSubmit(`${text}`)} className={`px-2 py-1 rounded border ${darkMode ? 'border-gray-500 text-gray-200 hover:bg-gray-800' : 'border-gray-400 text-gray-800 hover:bg-gray-100'}`}>
-                            {text}
-                          </button>
-                        )
-                        const items: JSX.Element[] = []
-                        if (t === 'cube') {
-                          items.push(mk(`Increase height of ${label} by 5 mm.`))
-                          items.push(mk(`Increase width of ${label} by 5 mm.`))
-                        } else if (t === 'cylinder' || t === 'hole') {
-                          items.push(mk(`Increase diameter of ${label} by 1 mm.`))
-                          items.push(mk(`Make ${label} a ${t === 'hole' ? 'cut' : 'boss'} if not already.`))
-                        } else if (t === 'slot') {
-                          items.push(mk(`Increase slot width of ${label} by 1 mm.`))
-                          items.push(mk(`Increase slot length of ${label} by 2 mm.`))
-                        } else {
-                          items.push(mk(`Slightly enlarge ${label}.`))
-                        }
-                        return (
-                          <div key={`${t}-${idx}`} className="flex items-center gap-2">
-                            {items}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-                {(isBracket || isClamp) && (
-                  <div className="text-xs opacity-80">Fill in missing prompts above; this quick setup prioritizes cable holders.</div>
-                )}
-                <div className="mt-2 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const parts: string[] = []
-                      if (isCableHolder) {
-                        parts.push(`Cable holder: cable diameter ${wizCableDiameter}mm, ${wizSlotCount} slots, spacing ${wizSlotSpacing}mm`)
-                        parts.push(`Mount: ${wizMount}${wizMount==='clamp' ? ` (desk thickness ${wizDeskThickness}mm)` : ''}`)
-                      } else if (isBracket) {
-                        parts.push('Use sensible defaults for an L-bracket and confirm key dimensions.')
-                      } else if (isClamp) {
-                        parts.push('Use sensible defaults for a simple clamp and ask for jaw width if missing.')
-                      }
-                      handleSubmit(parts.join('. ') + '.')
-                      setWizardDismissed(true)
-                    }}
-                    className="px-3 py-1 rounded bg-blue-700 text-white text-sm hover:bg-blue-800"
-                  >
-                    Apply Setup
-                  </button>
-                </div>
-              </div>
-            )
-          })()}
-
-          {selectedFeature && (
-            <div className={`mt-2 p-3 rounded border ${darkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'}`}>
-              <div className="text-xs mb-2">Quick actions for <strong>{selectedFeature.label}</strong></div>
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => handleSubmit(`Round edges of ${selectedFeature.label} with a 2mm fillet.`)} className={`text-xs px-2 py-1 rounded border ${darkMode ? 'border-gray-400 text-gray-200 hover:bg-gray-800' : 'border-gray-500 text-gray-800 hover:bg-gray-100'}`}>Fillet 2mm</button>
-                <button type="button" onClick={() => handleSubmit(`Increase the height of ${selectedFeature.label} by 5 mm.`)} className={`text-xs px-2 py-1 rounded border ${darkMode ? 'border-gray-400 text-gray-200 hover:bg-gray-800' : 'border-gray-500 text-gray-800 hover:bg-gray-100'}`}>+5mm height</button>
-                <button type="button" onClick={() => handleSubmit(`Decrease the height of ${selectedFeature.label} by 5 mm.`)} className={`text-xs px-2 py-1 rounded border ${darkMode ? 'border-gray-400 text-gray-200 hover:bg-gray-800' : 'border-gray-500 text-gray-800 hover:bg-gray-100'}`}>-5mm height</button>
-                {lastScenePick && (
-                  <button type="button" onClick={() => handleSubmit(`Move ${selectedFeature.label} to face G${lastScenePick.groupId}.`)} className={`text-xs px-2 py-1 rounded border ${darkMode ? 'border-gray-400 text-gray-200 hover:bg-gray-800' : 'border-gray-500 text-gray-800 hover:bg-gray-100'}`}>Move to G{lastScenePick.groupId}</button>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => handleSubmit()}
-              disabled={loading}
-              className="bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded font-medium transition"
-            >
-              {loading ? 'Generating...' : 'Send'}
-            </button>
-            <button
-              onClick={handleUndo}
-              disabled={pastStates.length === 0}
-              className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
-            >
-              Undo
-            </button>
-            <button
-              onClick={handleRedo}
-              disabled={futureStates.length === 0}
-              className="bg-indigo-700 hover:bg-indigo-800 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
-            >
-              Redo
-            </button>
-            <button onClick={handleNewProject} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded font-medium transition">
-              🆕 New Project
-            </button>
-            {currentProjectId ? (
-              <button onClick={handleUpdateProject} className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded font-medium transition">
-                Save Changes
-              </button>
-            ) : (
-              <button
-                onClick={handleSaveProject}
-                disabled={!userPrompt && history.length === 0}
-                className="bg-green-700 hover:bg-green-800 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
-              >
-                Save as New Project
-              </button>
-            )}
-          </div>
         </div>
       </div>
 
       {/* RIGHT PANEL */}
       <div
-        className={`lg:w-[40%] w-full p-4 shadow-md rounded-lg border space-y-4 transition ${
+        className={ `lg:w-[40%] w-full p-4 shadow-md rounded-lg border space-y-4 transition ${ 
           darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-400'
-        }`}
+        } `} 
       >
         <h2 className="font-bold text-lg">🧱 3D Preview</h2>
         {stlBlobUrl ? (
@@ -1136,4 +968,6 @@ __root__();
     </div>
   )
 }
+
+
 
