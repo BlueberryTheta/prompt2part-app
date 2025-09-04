@@ -493,19 +493,33 @@ function ensure2DExtruded(code: string): string {
     'handle_thickness',
     'wall_thickness',
     'thickness',
-  ]);
-  const height = (candidate && candidate > 0) ? candidate : 3;
+  ])
+  const height = (candidate && candidate > 0) ? candidate : 3
 
-  // Skip lines already under linear_extrude or rotate_extrude
-  // Wrap patterns like: [transforms] [offset?] (square|circle|polygon)(...);
-  const re = new RegExp(
-    String.raw`(^|\n)([ \t]*(?:translate\([^)]*\)\s*)?(?:rotate\([^)]*\)\s*)?(?:scale\([^)]*\)\s*)?)(?!linear_extrude|rotate_extrude)((?:offset\([^)]*\)\s*)?(?:square\([^)]*\)|circle\([^)]*\)|polygon\([^)]*\)))\s*;`,
-    'gmi'
-  );
+  const lines = code.replace(/\r\n/g, '\n').split('\n')
+  const out: string[] = []
+  const lineRe = new RegExp(
+    String.raw`^([ \t]*)(?:translate\([^)]*\)[ \t]*)?(?:rotate\([^)]*\)[ \t]*)?(?:scale\([^)]*\)[ \t]*)?((?:offset\([^)]*\)[ \t]*)?(?:square\([^)]*\)|circle\([^)]*\)|polygon\([^)]*\)))[ \t]*;[ \t]*$`,
+    'i'
+  )
 
-  return code.replace(re, (_m, pre: string, xfms: string, shape: string) => {
-    return `${pre}${xfms}linear_extrude(height=${height}) { ${shape}; }`;
-  });
+  for (const line of lines) {
+    // Skip lines that already include linear_extrude or rotate_extrude
+    if (/\b(linear_extrude|rotate_extrude)\b/i.test(line)) {
+      out.push(line)
+      continue
+    }
+    const m = line.match(lineRe)
+    if (!m) {
+      out.push(line)
+      continue
+    }
+    const indent = m[1] || ''
+    const shape = m[2]
+    out.push(`${indent}linear_extrude(height=${height}) { ${shape}; }`)
+  }
+
+  return out.join('\n')
 }
 
 
