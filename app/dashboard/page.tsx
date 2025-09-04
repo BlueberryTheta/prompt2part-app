@@ -47,6 +47,8 @@ export default function DashboardPage() {
   const [aiAsk, setAiAsk] = useState<string[] | undefined>(undefined)
   const [aiOptions, setAiOptions] = useState<Record<string, string[]> | undefined>(undefined)
 
+  
+
   // Feature tree + selection
   const [features, setFeatures] = useState<Feature[]>([])
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
@@ -54,6 +56,9 @@ export default function DashboardPage() {
 
   // Last scene pick (to send to backend as selection)
   const [lastScenePick, setLastScenePick] = useState<{ groupId: number; point: [number, number, number] } | null>(null)
+
+  // When a feature is selected, fetch its adjustable parameters from the server (derived from current spec)
+  // Placed after `spec` declaration to satisfy TS
 
   // 🚦 Race guard: only the latest request may update model state
   const requestSeqRef = useRef(0)
@@ -632,6 +637,33 @@ __root__();
     setSpec({ units: 'mm' }) // also clear spec so next prompt starts fresh
     setRenderVersion(v => v + 1)
   }
+
+  // When a feature is selected, fetch its adjustable parameters from the server (derived from current spec)
+  useEffect(() => {
+    let cancelled = false
+    const run = async () => {
+      if (!spec) return
+      try {
+        const res = await fetch('/api/adjustables', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ spec, featureId: selectedFeatureId || undefined }),
+          cache: 'no-store',
+        })
+        const data = await res.json()
+        if (cancelled) return
+        if (res.ok) {
+          setAiObjectType(data?.objectType)
+          setAiAdjustables(Array.isArray(data?.adjustables) ? data.adjustables.filter((f:any)=>f && typeof f.key==='string' && f.key.length>0) : [])
+          setAiParams((data?.adjust_params && typeof data.adjust_params === 'object') ? data.adjust_params : {})
+          setAiAsk(undefined)
+          setAiOptions(undefined)
+        }
+      } catch {}
+    }
+    run()
+    return () => { cancelled = true }
+  }, [selectedFeatureId, spec])
 
   const handleUpdateProject = async () => {
     if (!currentProjectId) return

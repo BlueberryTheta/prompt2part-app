@@ -263,25 +263,25 @@ function ensureFeatureIds(spec: Spec): Spec {
 
 // If model used `spec.geometry` instead of `spec.features`, fold it into features for the client.
 function normalizeGeometryToFeatures(spec: Spec): Spec {
-  if (!spec || !Array.isArray((spec as any).geometry) || ((spec as any).geometry as any[]).length === 0) {
-    return spec
-  }
-  const out: Spec = JSON.parse(JSON.stringify(spec))
-  const geom: any[] = (out as any).geometry || []
-  delete (out as any).geometry
-  out.features = [...(out.features || [])]
+  if (!spec) return spec
+  const anySpec: any = spec as any
+  const geomAny = anySpec.geometry
+  if (!geomAny) return spec
 
-  for (const g of geom) {
+  const out: Spec = JSON.parse(JSON.stringify(spec))
+  const feats: any[] = [...(out.features || [])]
+
+  const pushFromGeom = (g: any) => {
     const t = String(g?.type || '').toLowerCase()
     if (t === 'cube') {
-      out.features.push({
+      feats.push({
         type: 'cube',
         side_length: g?.side_length ?? g?.dimensions?.side_length ?? g?.width ?? g?.height ?? g?.depth,
         dimensions: g?.dimensions,
         position: g?.position,
       } as any)
     } else if (t === 'cylinder') {
-      out.features.push({
+      feats.push({
         type: 'cylinder',
         diameter: g?.diameter ?? g?.dimensions?.diameter ?? (g?.radius ? g.radius * 2 : undefined),
         radius: g?.radius ?? g?.dimensions?.radius,
@@ -291,10 +291,22 @@ function normalizeGeometryToFeatures(spec: Spec): Spec {
         operation: g?.operation,
       } as any)
     } else {
-      // pass-through for other types
-      out.features.push(g)
+      // pass-through for other or unknown types
+      feats.push(g)
     }
   }
+
+  if (Array.isArray(geomAny)) {
+    for (const g of geomAny) pushFromGeom(g)
+  } else if (geomAny && typeof geomAny === 'object') {
+    for (const key of Object.keys(geomAny)) {
+      const g = (geomAny as any)[key]
+      if (g && typeof g === 'object') pushFromGeom(g)
+    }
+  }
+
+  ;(out as any).features = feats
+  delete (out as any).geometry
   return out
 }
 
