@@ -210,11 +210,15 @@ __root__();
 
     const text = await backendRes.clone().text()
     if (!backendRes.ok) {
+      // Log the exact code we attempted to render for easier debugging
+      try { console.error('Render failed (HTTP):', backendRes.status, text, '\nCode payload:\n', payload) } catch {}
       throw new Error(`Backend render error ${backendRes.status}: ${text}`)
     }
 
     const ct = backendRes.headers.get('Content-Type') || ''
     if (ct.includes('application/json')) {
+      // Backend returned JSON error payload; dump the code we sent
+      try { console.error('Render failed (JSON):', text, '\nCode payload:\n', payload) } catch {}
       throw new Error(`Backend returned JSON instead of STL: ${text}`)
     }
 
