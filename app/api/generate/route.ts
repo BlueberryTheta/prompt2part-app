@@ -454,6 +454,9 @@ export function sanitizeOpenSCAD(rawish: string) {
   // Fix broken or empty call endings
   raw = fixBrokenEmptyCalls(raw);
 
+  // Remove stray closing braces that leaked into function call argument lists
+  raw = fixStrayBracesInCalls(raw);
+
   // Ensure 2D primitives are extruded into 3D when used in 3D CSG
   raw = ensure2DExtruded(raw);
 
@@ -469,6 +472,24 @@ export function sanitizeOpenSCAD(rawish: string) {
   } catch {}
 
   return raw;
+}
+
+// Remove sequences like "} } )" or "} )" that accidentally appear inside argument lists
+function fixStrayBracesInCalls(code: string) {
+  let out = code;
+  const heads = '(?:translate|rotate|scale|mirror|union|difference|intersection|hull|minkowski|cube|sphere|cylinder|square|circle|polygon|polyhedron|linear_extrude|rotate_extrude)';
+  // Double stray braces before )
+  const re2 = new RegExp(String.raw`(\b${heads}\s*\([^)]*)\}\s*\}\s*\)`, 'g');
+  out = out.replace(re2, '$1)');
+  // Single stray brace before )
+  const re1 = new RegExp(String.raw`(\b${heads}\s*\([^)]*)\}\s*\)`, 'g');
+  out = out.replace(re1, '$1)');
+  // Also handle cases with a trailing semicolon
+  const re2s = new RegExp(String.raw`(\b${heads}\s*\([^)]*)\}\s*\}\s*\)\s*;`, 'g');
+  out = out.replace(re2s, '$1);');
+  const re1s = new RegExp(String.raw`(\b${heads}\s*\([^)]*)\}\s*\)\s*;`, 'g');
+  out = out.replace(re1s, '$1);');
+  return out;
 }
 
 // Try to extract a numeric variable from code (simple assignments at top)
