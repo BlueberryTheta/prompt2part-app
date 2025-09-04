@@ -498,25 +498,46 @@ function ensure2DExtruded(code: string): string {
 
   const lines = code.replace(/\r\n/g, '\n').split('\n')
   const out: string[] = []
-  const lineRe = new RegExp(
-    String.raw`^([ \t]*)(?:translate\([^)]*\)[ \t]*)?(?:rotate\([^)]*\)[ \t]*)?(?:scale\([^)]*\)[ \t]*)?((?:offset\([^)]*\)[ \t]*)?(?:square\([^)]*\)|circle\([^)]*\)|polygon\([^)]*\)))[ \t]*;[ \t]*$`,
-    'i'
-  )
 
-  for (const line of lines) {
-    // Skip lines that already include linear_extrude or rotate_extrude
-    if (/\b(linear_extrude|rotate_extrude)\b/i.test(line)) {
-      out.push(line)
-      continue
+  const isModifierLine = (s: string) => /^(\s*)(translate|rotate|scale|mirror|offset)\([^)]*\)\s*$/.test(s)
+  const isExtrudePresent = (s: string) => /\b(linear_extrude|rotate_extrude)\b/i.test(s)
+  const primRe = /^\s*(square|circle|polygon)\([^;]*\)\s*;\s*$/i
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (isExtrudePresent(line)) { out.push(line); continue }
+    if (!primRe.test(line)) { out.push(line); continue }
+
+    // Collect contiguous modifier lines above (no semicolons)
+    let begin = i
+    const chain: string[] = []
+    for (let j = i - 1; j >= 0; j--) {
+      const lj = lines[j]
+      if (lj.trim() === '') { begin = j; continue }
+      if (isModifierLine(lj)) { begin = j; chain.unshift(lj.trim()); continue }
+      break
     }
-    const m = line.match(lineRe)
-    if (!m) {
-      out.push(line)
-      continue
+
+    const primLine = line.trim().replace(/;\s*$/, '')
+    // Split modifiers into non-offset transforms vs offset modifiers
+    const nonOffset: string[] = []
+    const offsets: string[] = []
+    for (const m of chain) {
+      if (/^offset\(/i.test(m.trim())) offsets.push(m.trim())
+      else nonOffset.push(m.trim())
     }
-    const indent = m[1] || ''
-    const shape = m[2]
-    out.push(`${indent}linear_extrude(height=${height}) { ${shape}; }`)
+
+    const indentMatch = (lines[begin] || '').match(/^(\s*)/)
+    const indent = indentMatch ? indentMatch[1] : ''
+
+    const prefix = (nonOffset.length > 0 ? nonOffset.join(' ') + ' ' : '')
+    const mid = `linear_extrude(height=${height}) `
+    const post = (offsets.length > 0 ? offsets.join(' ') + ' ' : '')
+    const rebuilt = `${indent}${prefix}${mid}${post}${primLine};`
+
+    // Replace lines [begin..i] with single rebuilt line
+    out.length = Math.max(0, out.length - (i - begin))
+    out.push(rebuilt)
   }
 
   return out.join('\n')
