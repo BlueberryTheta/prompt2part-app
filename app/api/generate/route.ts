@@ -454,6 +454,9 @@ function sanitizeOpenSCAD(rawish: string) {
   // Fix broken or empty call endings
   raw = fixBrokenEmptyCalls(raw);
 
+  // Ensure 2D primitives are extruded into 3D when used in 3D CSG
+  raw = ensure2DExtruded(raw);
+
   // Ensure a top-level call if exactly one module is declared
   try {
     const modRe = /^\s*module\s+([A-Za-z_]\w*)\s*\(/gim
@@ -466,6 +469,43 @@ function sanitizeOpenSCAD(rawish: string) {
   } catch {}
 
   return raw;
+}
+
+// Try to extract a numeric variable from code (simple assignments at top)
+function findNumericVar(code: string, names: string[]): number | null {
+  const head = code.replace(/\r\n/g, '\n').split('\n').slice(0, 200).join('\n');
+  for (const name of names) {
+    const re = new RegExp(String.raw`^\s*${name}\s*=\s*([-+]?\d*\.?\d+)\s*;`, 'mi');
+    const m = head.match(re);
+    if (m) {
+      const val = Number(m[1]);
+      if (Number.isFinite(val)) return val;
+    }
+  }
+  return null;
+}
+
+// Best-effort: if 2D primitives (square/circle/polygon with optional offset) are used directly,
+// wrap them in a small linear_extrude so they contribute to 3D CSG operations.
+function ensure2DExtruded(code: string): string {
+  // Choose an extrusion height from common thickness params, else default to 3
+  const candidate = findNumericVar(code, [
+    'handle_thickness',
+    'wall_thickness',
+    'thickness',
+  ]);
+  const height = (candidate && candidate > 0) ? candidate : 3;
+
+  // Skip lines already under linear_extrude or rotate_extrude
+  // Wrap patterns like: [transforms] [offset?] (square|circle|polygon)(...);
+  const re = new RegExp(
+    String.raw`(^|\n)([ \t]*(?:translate\([^)]*\)\s*)?(?:rotate\([^)]*\)\s*)?(?:scale\([^)]*\)\s*)?)(?!linear_extrude|rotate_extrude)((?:offset\([^)]*\)\s*)?(?:square\([^)]*\)|circle\([^)]*\)|polygon\([^)]*\)))\s*;`,
+    'gmi'
+  );
+
+  return code.replace(re, (_m, pre: string, xfms: string, shape: string) => {
+    return `${pre}${xfms}linear_extrude(height=${height}) { ${shape}; }`;
+  });
 }
 
 
