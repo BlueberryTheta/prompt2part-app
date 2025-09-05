@@ -751,8 +751,28 @@ __root__();
     link.click()
   }
 
-  function buildApplyPromptFromAdjustables(aiObjectType: string | undefined, aiParams: Record<string, any>, aiAdjustables: any[] | undefined): string | undefined {
-    throw new Error('Function not implemented.')
+  function buildApplyPromptFromAdjustables(
+    aiObjectType: string | undefined,
+    aiParams: Record<string, any>,
+    aiAdjustables: any[] | undefined
+  ): string {
+    const fields = Array.isArray(aiAdjustables) ? aiAdjustables : []
+    // Build a minimal, explicit update map from the current adjustable keys
+    const update: Record<string, any> = {}
+    for (const f of fields) {
+      if (!f || typeof f.key !== 'string' || !f.key.length) continue
+      const val = (aiParams as any)[f.key]
+      if (val !== undefined) update[f.key] = val
+    }
+
+    const title = aiObjectType ? `the current ${aiObjectType}` : 'the selected feature'
+    const body = Object.keys(update).length > 0 ? JSON.stringify(update, null, 2) : '{}'
+    // Clear, scoped instruction for the model
+    return [
+      `Apply these parameter values to ${title}.`,
+      'Only update the listed parameters on this feature; do not change other features.',
+      body,
+    ].join('\n')
   }
 
   // === UI ===
