@@ -640,7 +640,11 @@ __root__();
         const res = await fetch('/api/adjustables', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ spec, featureId: selectedFeatureId || undefined }),
+          body: JSON.stringify({
+            spec,
+            featureId: selectedFeatureId || undefined,
+            featureIndex: selectedFeatureId ? features.findIndex(f => f.id === selectedFeatureId) : undefined,
+          }),
           cache: 'no-store',
         })
         const data = await res.json()

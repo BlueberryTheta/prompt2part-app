@@ -3,9 +3,12 @@ export const runtime = 'edge'
 
 type AnySpec = any
 
-function findFeature(spec: AnySpec, featureId?: string): any | null {
+function findFeature(spec: AnySpec, featureId?: string, featureIndex?: number): any | null {
   const feats: any[] = Array.isArray(spec?.features) ? spec.features : []
   if (!feats.length) return null
+  if (Number.isInteger(featureIndex) && featureIndex! >= 0 && featureIndex! < feats.length) {
+    return feats[featureIndex!]
+  }
   if (featureId) {
     return feats.find((f: any) => (f?.feature_id || f?.id) === featureId) || null
   }
@@ -30,8 +33,8 @@ function flattenParams(obj: any, base = '', outParams: Record<string, any> = {})
 
 export async function POST(req: NextRequest) {
   try {
-    const { spec, featureId } = (await req.json()) as { spec?: AnySpec; featureId?: string }
-    const feat = findFeature(spec, featureId)
+    const { spec, featureId, featureIndex } = (await req.json()) as { spec?: AnySpec; featureId?: string; featureIndex?: number }
+    const feat = findFeature(spec, featureId, featureIndex)
     const params: Record<string, any> = feat ? flattenParams(feat) : {}
 
     const adjustables = Object.keys(params).map((key) => {
@@ -47,4 +50,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: e?.message || 'adjustables error' }, { status: 500 })
   }
 }
-
