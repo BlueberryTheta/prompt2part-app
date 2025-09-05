@@ -902,7 +902,7 @@ __root__();
                   {q}
                 </button>
               ))}
-              {assumptions.length > 0 && (
+              {(assumptions.length > 0 || questions.length > 0) && (
                 <button
                   type="button"
                   onClick={() => handleSubmit('Use the listed defaults and proceed to generate the model.', { acceptDefaults: true })}
