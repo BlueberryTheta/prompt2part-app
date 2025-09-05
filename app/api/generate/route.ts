@@ -628,7 +628,7 @@ export async function POST(req: NextRequest) {
     let adjustOptions: Record<string, string[]> | undefined
     try {
       const parsed = safeParseJson(mergedRaw)
-      mergedSpec = parsed.spec || incomingSpec
+      mergedSpec = mergeSpecsPreserve(incomingSpec, parsed.spec)
       assumptions = parsed.assumptions || []
       missing = parsed.missing || []
       questions = parsed.questions || []
@@ -640,7 +640,41 @@ export async function POST(req: NextRequest) {
     } catch (e: any) {
       console.error('Spec merge parse error:', e?.message, mergedRaw)
       return NextResponse.json({ error: 'Spec merge failed: invalid JSON' } as ApiResp, { status: 500 })
+}
+
+// Non-destructive merge: preserve existing features; overlay updates by feature_id/id; append new ones.
+function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Spec {
+  const out: Spec = JSON.parse(JSON.stringify(base || {}))
+  if (!patch) return out
+  const patchNorm = normalizeGeometryToFeatures(patch)
+
+  // Scalar fields
+  if (patchNorm.units) out.units = patchNorm.units
+  if (patchNorm.part_type) out.part_type = patchNorm.part_type
+  if (patchNorm.overall) out.overall = { ...(out.overall || {}), ...patchNorm.overall }
+  if (patchNorm.tolerances) out.tolerances = { ...(out.tolerances || {}), ...patchNorm.tolerances }
+  if (patchNorm.notes) out.notes = patchNorm.notes
+
+  const baseFeats: any[] = Array.isArray((out as any).features) ? ((out as any).features as any[]) : []
+  const patchFeats: any[] = Array.isArray((patchNorm as any).features) ? ((patchNorm as any).features as any[]) : []
+  if (patchFeats.length > 0) {
+    const idOf = (f: any, idx: number) => f?.feature_id || f?.id || `__idx_${idx}`
+    const indexById = new Map<string, number>()
+    baseFeats.forEach((f, i) => indexById.set(idOf(f, i), i))
+    for (let j = 0; j < patchFeats.length; j++) {
+      const pf = patchFeats[j]
+      const key = idOf(pf, j)
+      if (indexById.has(key)) {
+        const i = indexById.get(key)!
+        baseFeats[i] = { ...baseFeats[i], ...pf }
+      } else {
+        baseFeats.push(pf)
+      }
     }
+    ;(out as any).features = baseFeats
+  }
+  return out
+}
 
     // Normalize face casing & geometry->features and assign feature ids
     mergedSpec = normalizeGeometryToFeatures(mergedSpec)
