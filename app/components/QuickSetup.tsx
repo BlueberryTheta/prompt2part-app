@@ -19,6 +19,8 @@ export type Adjustable = {
 
 function getByPath(obj: any, path: string): any {
   if (!obj) return undefined
+  // Support both flattened dot-keys (e.g., 'body.diameter') and nested objects
+  if (Object.prototype.hasOwnProperty.call(obj, path)) return obj[path]
   const parts = path.split('.')
   let cur = obj
   for (const p of parts) {
@@ -38,6 +40,8 @@ function setByPath(obj: any, path: string, value: any): any {
     cur = cur[k]
   }
   cur[parts[parts.length - 1]] = value
+  // Also maintain a flattened dot-key for downstream consumers that expect flat maps
+  ;(out as any)[path] = value
   return out
 }
 
