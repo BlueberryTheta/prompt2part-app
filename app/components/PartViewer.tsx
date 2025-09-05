@@ -188,54 +188,7 @@ function buildSubGeometryForGroup(
 
 /** ---------- small UI bits ---------- **/
 
-function OrientationLabels({ geometry }: { geometry: BufferGeometry | null }) {
-  const info = useMemo(() => computeBoundingBoxInfo(geometry), [geometry])
-  if (!info) return null
-  const { bb, size, center } = info
-  const pad = Math.max(size.length() * 0.04, 6)
-
-  const positions = [
-    { name: 'Front', pos: [center.x, center.y - size.y * 0.3, bb.max.z + pad] }, // +Z
-    { name: 'Back', pos: [center.x, center.y - size.y * 0.3, bb.min.z - pad] },  // -Z
-    { name: 'Right', pos: [bb.max.x + pad, center.y - size.y * 0.3, center.z] }, // +X
-    { name: 'Left', pos: [bb.min.x - pad, center.y - size.y * 0.3, center.z] },  // -X
-    { name: 'Top', pos: [center.x, bb.max.y + pad, center.z] },                  // +Y
-    { name: 'Bottom', pos: [center.x, bb.min.y - pad, center.z] },               // -Y
-  ] as const
-
-  return (
-    <>
-      {positions.map(o => (
-        <Html
-          key={o.name}
-          position={o.pos as [number, number, number]}
-          center
-          distanceFactor={8}
-          transform={false}
-          occlude={false}
-          zIndexRange={[10, 0]}
-        >
-          <div
-            style={{
-              background: 'rgba(53,126,221,0.92)',
-              color: 'white',
-              padding: '6px 10px',
-              borderRadius: 8,
-              fontWeight: 700,
-              boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
-              fontSize: 12,
-              textTransform: 'uppercase',
-              userSelect: 'none',
-              pointerEvents: 'none',
-            }}
-          >
-            {o.name}
-          </div>
-        </Html>
-      ))}
-    </>
-  )
-}
+// Orientation labels removed per UI request
 
 function GroupMarker({ position, groupId }: { position: THREE.Vector3; groupId: number }) {
   return (
@@ -409,7 +362,7 @@ function STLModel({
 
   return geometry ? (
     <>
-      <OrientationLabels geometry={geometry} />
+      {/* Orientation labels removed */}
 
       {/* Base mesh (never tinted fully by selection) */}
       <mesh
@@ -478,7 +431,7 @@ export default function PartViewer({
 }: PartViewerProps) {
   const [picked, setPicked] = useState<{ point: THREE.Vector3; groupId: number } | null>(null)
   const [autoRotate, setAutoRotate] = useState<boolean>(true)
-  const [showGrid, setShowGrid] = useState<boolean>(false)
+  // grid removed per UI request
   const [measureMode, setMeasureMode] = useState<boolean>(false)
   const [measurePts, setMeasurePts] = useState<THREE.Vector3[]>([])
   const [snapMode, setSnapMode] = useState<'none'|'face'|'vertex'>('none')
@@ -547,12 +500,6 @@ export default function PartViewer({
       <div className="absolute right-2 top-12 z-10 flex gap-1">
         <button
           className="px-2 py-1 rounded bg-gray-900 text-white text-xs shadow hover:bg-black"
-          onClick={() => setShowGrid(v => !v)}
-        >
-          {showGrid ? 'Hide Grid' : 'Show Grid'}
-        </button>
-        <button
-          className="px-2 py-1 rounded bg-gray-900 text-white text-xs shadow hover:bg-black"
           onClick={() => { setMeasureMode(v => !v); setMeasurePts([]) }}
         >
           {measureMode ? 'Exit Measure' : 'Measure'}
@@ -575,7 +522,7 @@ export default function PartViewer({
           frameloop={autoRotate ? 'always' : 'demand'}
           dpr={[1, 1.5]}
         >
-          {showGrid && <gridHelper args={[200, 20]} position={[0, -0.01, 0]} />}
+          {/* grid removed */}
           <ambientLight intensity={0.8} />
           <directionalLight position={[50, 50, 50]} intensity={0.7} />
           <OrbitControls enablePan enableZoom enableRotate />
