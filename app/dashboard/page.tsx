@@ -930,14 +930,54 @@ __root__();
               )}
             />
           </div>
+          <div className="flex flex-wrap gap-2 mt-3">
+            <button
+              type="button"
+              onClick={() => handleSubmit()}
+              disabled={loading}
+              className="bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded font-medium transition"
+            >
+              {loading ? 'Generating...' : 'Send'}
+            </button>
+            <button
+              onClick={handleUndo}
+              disabled={pastStates.length === 0}
+              className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
+            >
+              Undo
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={futureStates.length === 0}
+              className="bg-indigo-700 hover:bg-indigo-800 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
+            >
+              Redo
+            </button>
+            <button onClick={handleNewProject} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded font-medium transition">
+              New Project
+            </button>
+            {currentProjectId ? (
+              <button onClick={handleUpdateProject} className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded font-medium transition">
+                Save Changes
+              </button>
+            ) : (
+              <button
+                onClick={handleSaveProject}
+                disabled={!userPrompt && history.length === 0}
+                className="bg-green-700 hover:bg-green-800 text-white px-4 py-2 rounded disabled:opacity-50 font-medium transition"
+              >
+                Save as New Project
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {/* RIGHT PANEL */}
       <div
-        className={ `lg:w-[40%] w-full p-4 shadow-md rounded-lg border space-y-4 transition ${ 
+        className={`lg:w-[40%] w-full p-4 shadow-md rounded-lg border space-y-4 transition ${
           darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-400'
-        } `} 
+        }`}
       >
         <h2 className="font-bold text-lg">🧱 3D Preview</h2>
         {stlBlobUrl ? (
