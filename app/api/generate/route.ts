@@ -141,6 +141,11 @@ Include highlightable metadata for each feature you create or edit:
 If UI_SELECTED_FEATURE is present, apply the change to that feature.
 For holders/brackets/clamps/enclosures/knobs/adapters, choose 2–3 key questions with defaults; otherwise proceed with reasonable assumptions.
 
+Positioning requirements:
+- For every NEW feature you create (cube, cylinder, hole, slot, etc.), ask the user for the desired position (center point in mm) unless it is obvious from context.
+- Record positions in SPEC under position.center: [x, y, z] (numbers, mm). If the feature references a face, position the center on that face unless the user requests offsets.
+- When the user accepts defaults, set a reasonable default (e.g., [0,0,0] or centered on the referenced face) and proceed.
+
 Additionally, you MUST return an AI-driven Quick Setup schema with ONLY the parameters that matter now:
 - objectType: normalized short type for the current object (e.g., "cube", "cylinder", "cable_holder").
 - params: a flat map of current parameter values used by the geometry (numbers/strings/booleans or nested objects).
@@ -167,6 +172,7 @@ Rules:
 - Boss on a face: cylinder base ON the face (center=false), protrude OUTWARD by height, include small attach_overlap into host.
 - Cut on a face: subtract cylinder starting at face going INTO body by height/through.
 - If a face center is referenced, use the face centroid.
+- When SPEC contains position.center [x,y,z] for a feature, wrap that feature's geometry in translate([x,y,z]) so that its center is placed at that position.
 - Do not include $fn (caller sets tessellation).
 - If there is exactly one top-level module defined, ensure it is called at the end.
 - Preserve positions and the global coordinate frame: do NOT recenter or translate existing features unless explicitly requested.
