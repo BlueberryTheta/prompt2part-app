@@ -426,6 +426,16 @@ function STLModel({
           </div>
         </Html>
       )}
+
+      {/* Fallback visual marker when a feature is selected without a group/point */}
+      {markCenterFallback && activeMarkerPoint && (
+        <>
+          <mesh position={activeMarkerPoint}>
+            <sphereGeometry args={[1.8, 16, 16]} />
+            <meshStandardMaterial color="#ffd166" emissive="#ffbf00" emissiveIntensity={0.4} />
+          </mesh>
+        </>
+      )}
     </>
   ) : null
 }
