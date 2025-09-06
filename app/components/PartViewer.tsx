@@ -427,20 +427,7 @@ function STLModel({
         </Html>
       )}
 
-      {/* Fallback visual marker when a feature is selected without a group/point */}
-      {markCenterFallback && activeMarkerPoint && (
-        <>
-          <mesh position={activeMarkerPoint}>
-            <sphereGeometry args={[1.8, 16, 16]} />
-            <meshBasicMaterial color="#ffd166" depthTest={false} depthWrite={false} transparent opacity={0.95} />
-          </mesh>
-          <Html position={activeMarkerPoint} center zIndexRange={[22, 0]} transform={false} occlude={false}>
-            <div style={{ background: 'rgba(255, 209, 102, 0.95)', color: '#1a1a1a', padding: '3px 6px', borderRadius: 6, fontSize: 11, fontWeight: 700, boxShadow: '0 2px 6px rgba(0,0,0,0.35)', userSelect: 'none' }}>
-              Selected
-            </div>
-          </Html>
-        </>
-      )}
+      {/* No generic fallback marker to avoid misleading selection; rely on group/position highlights only */}
     </>
   ) : null
 }

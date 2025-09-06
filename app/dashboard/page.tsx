@@ -392,6 +392,10 @@ __root__();
     if (selectedFeatureId && !fresh.find(f => f.id === selectedFeatureId)) {
       setSelectedFeatureId(null)
     }
+    // Auto-select the first feature when nothing is selected, so Quick Setup can populate immediately
+    if (!selectedFeatureId && fresh.length > 0) {
+      setSelectedFeatureId(fresh[0].id)
+    }
   }
 
   // === Submit ===
