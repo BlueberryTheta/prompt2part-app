@@ -310,6 +310,24 @@ function normalizeGeometryToFeatures(spec: Spec): Spec {
   return out
 }
 
+// Fallback: derive a minimal feature list from sanitized OpenSCAD code
+function deriveFeaturesFromCode(code: string): any[] {
+  const feats: any[] = []
+  const src = (code || '').replace(/\r\n/g, '\n')
+  const add = (t: string) => feats.push({ type: t, feature_id: `${t}-${feats.length + 1}` })
+  try {
+    // Count first few primitives as coarse features
+    const cubeRe = /\bcube\s*\(/gi
+    const cylRe = /\bcylinder\s*\(/gi
+    let m: RegExpExecArray | null
+    let count = 0
+    while ((m = cubeRe.exec(src)) && count < 5) { add('cube'); count++ }
+    count = 0
+    while ((m = cylRe.exec(src)) && count < 5) { add('cylinder'); count++ }
+  } catch {}
+  return feats
+}
+
 // Do we have any subtractive features in the spec?
 function hasCutFeatures(spec: Spec): boolean {
   const feats = spec.features || []
@@ -745,22 +763,30 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
       } satisfies ApiResp)
     }
 
-    // 2) codegen
-    const codeMsg: Msg[] = [
-      { role: 'system', content: sysPromptCode() },
-      {
-        role: 'user',
-        content:
-          (selection ? `SELECTION:\n${JSON.stringify(selection, null, 2)}\n\n` : '') +
-          `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}`,
-      },
-    ]
-    const codeRaw = await openai(codeMsg, 1800, 0.1)
+  // 2) codegen
+  const codeMsg: Msg[] = [
+    { role: 'system', content: sysPromptCode() },
+    {
+      role: 'user',
+      content:
+        (selection ? `SELECTION:\n${JSON.stringify(selection, null, 2)}\n\n` : '') +
+        `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}`,
+    },
+  ]
+  const codeRaw = await openai(codeMsg, 1800, 0.1)
 
-    // Sanitize & heal code
-    let code = sanitizeOpenSCAD(codeRaw)
-    // If no cuts requested but model used difference(), turn into union()
-    code = rewriteDifferenceIfNoCuts(code, mergedSpec)
+  // Sanitize & heal code
+  let code = sanitizeOpenSCAD(codeRaw)
+  // If no cuts requested but model used difference(), turn into union()
+  code = rewriteDifferenceIfNoCuts(code, mergedSpec)
+
+    // Ensure feature list is populated even if the model omitted it
+    if (!Array.isArray((mergedSpec as any).features) || ((mergedSpec as any).features as any[]).length === 0) {
+      try {
+        const derived = deriveFeaturesFromCode(code)
+        if (derived.length > 0) (mergedSpec as any).features = derived
+      } catch {}
+    }
 
     if (!looksLikeSCAD(code)) {
       return NextResponse.json({
