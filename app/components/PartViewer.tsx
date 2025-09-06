@@ -432,8 +432,13 @@ function STLModel({
         <>
           <mesh position={activeMarkerPoint}>
             <sphereGeometry args={[1.8, 16, 16]} />
-            <meshStandardMaterial color="#ffd166" emissive="#ffbf00" emissiveIntensity={0.4} />
+            <meshBasicMaterial color="#ffd166" depthTest={false} depthWrite={false} transparent opacity={0.95} />
           </mesh>
+          <Html position={activeMarkerPoint} center zIndexRange={[22, 0]} transform={false} occlude={false}>
+            <div style={{ background: 'rgba(255, 209, 102, 0.95)', color: '#1a1a1a', padding: '3px 6px', borderRadius: 6, fontSize: 11, fontWeight: 700, boxShadow: '0 2px 6px rgba(0,0,0,0.35)', userSelect: 'none' }}>
+              Selected
+            </div>
+          </Html>
         </>
       )}
     </>
