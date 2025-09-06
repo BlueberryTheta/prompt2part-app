@@ -79,6 +79,7 @@ type ApiReq = {
   spec?: Spec
   selection?: { faceIndex?: number; point?: [number, number, number]; featureId?: string }
   acceptDefaults?: boolean
+  currentCode?: string
 }
 
 export type Adjustable = {
@@ -162,6 +163,8 @@ Rules:
 - If a face center is referenced, use the face centroid.
 - Do not include $fn (caller sets tessellation).
 - If there is exactly one top-level module defined, ensure it is called at the end.
+- Preserve positions and the global coordinate frame: do NOT recenter or translate existing features unless explicitly requested.
+- When CURRENT_CODE is provided, modify it minimally: keep existing transforms/positions and only update the targeted feature's parameters.
 - RETURN ONLY CODE.`.trim()
 }
 
@@ -612,7 +615,7 @@ function ensure2DExtruded(code: string): string {
 // ---------- handler ----------
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, history = [], spec: incomingSpec = {}, selection, acceptDefaults = false } =
+    const { prompt, history = [], spec: incomingSpec = {}, selection, acceptDefaults = false, currentCode } =
       (await req.json()) as ApiReq
 
     // Keep history short to reduce latency and cost
@@ -769,8 +772,9 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
     {
       role: 'user',
       content:
-        (selection ? `SELECTION:\n${JSON.stringify(selection, null, 2)}\n\n` : '') +
-        `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}`,
+          (selection ? `SELECTION:\n${JSON.stringify(selection, null, 2)}\n\n` : '') +
+          (currentCode ? `CURRENT_CODE (modify minimally, preserve positions):\n${currentCode}\n\n` : '') +
+          `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}`,
     },
   ]
   const codeRaw = await openai(codeMsg, 1800, 0.1)

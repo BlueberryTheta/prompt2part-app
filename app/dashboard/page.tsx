@@ -431,20 +431,21 @@ __root__();
     const res = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt: promptToSend,
-        history: baseHistory,
-        spec, // send our current spec
-        selection: (
-          lastScenePick || selectedFeatureId
-            ? {
+        body: JSON.stringify({
+          prompt: promptToSend,
+          history: baseHistory,
+          spec, // send our current spec
+          selection: (
+            lastScenePick || selectedFeatureId
+              ? {
                 ...(lastScenePick ? { faceIndex: lastScenePick.groupId, point: lastScenePick.point } : {}),
                 ...(selectedFeatureId ? { featureId: selectedFeatureId } : {}),
               }
-            : undefined
-        ),
-        acceptDefaults: !!options?.acceptDefaults,
-      }),
+              : undefined
+          ),
+          acceptDefaults: !!options?.acceptDefaults,
+          currentCode: response || undefined,
+        }),
       cache: 'no-store',
     })
     const data = await res.json()
