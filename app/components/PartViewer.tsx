@@ -228,12 +228,14 @@ function STLModel({
   onGroupPick,
   selectedGroupId,
   selectedPoint,
+  markCenterFallback,
 }: {
   stlUrl: string
   autoRotate: boolean
   onGroupPick: (info: GroupPickInfo) => void
   selectedGroupId?: number | null
   selectedPoint?: THREE.Vector3 | null
+  markCenterFallback?: boolean
 }) {
   const meshRef = useRef<Mesh>(null)
   const [geometry, setGeometry] = useState<BufferGeometry | null>(null)
@@ -359,8 +361,13 @@ function STLModel({
       const g = groups.find(x => x.id === activeHighlightGid)
       if (g) return g.label
     }
+    // Fallback: when requested (feature selected without group/point), mark the model center
+    if (markCenterFallback && geometry) {
+      const info = computeBoundingBoxInfo(geometry)
+      if (info) return info.center.clone()
+    }
     return hoverPoint || null
-  }, [selectedPoint, activeHighlightGid, groups, hoverPoint])
+  }, [selectedPoint, activeHighlightGid, groups, hoverPoint, markCenterFallback, geometry])
 
   return geometry ? (
     <>
@@ -443,6 +450,7 @@ export default function PartViewer({
   // feature selection within the viewer (list click) with optional external control
   const [internalSelectedFeatureId, setInternalSelectedFeatureId] = useState<string | null>(null)
   const selectedFeatureId = selectedFeatureIdProp ?? internalSelectedFeatureId
+
 
   const selectedFeature = useMemo(
     () => features.find((f) => f.id === selectedFeatureId) || null,
@@ -549,6 +557,7 @@ export default function PartViewer({
             }}
             selectedGroupId={selectedGroupId}
             selectedPoint={selectedPoint}
+            markCenterFallback={!!(selectedFeature && !selectedGroupId && !selectedPoint)}
           />
           {/* Optional marker for last scene-picked face */}
           {picked && <GroupMarker position={picked.point} groupId={picked.groupId} />}
