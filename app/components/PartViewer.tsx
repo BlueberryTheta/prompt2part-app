@@ -361,7 +361,7 @@ function STLModel({
       const g = groups.find(x => x.id === activeHighlightGid)
       if (g) return g.label
     }
-    // Fallback: when requested (feature selected without group/point), mark the model center
+    // Fallback: when a feature is selected but we lack a face/point, show model center
     if (markCenterFallback && geometry) {
       const info = computeBoundingBoxInfo(geometry)
       if (info) return info.center.clone()
@@ -425,6 +425,21 @@ function STLModel({
             G{activeHighlightGid}
           </div>
         </Html>
+      )}
+
+      {/* Fallback marker + label when no face/point is available for the selected feature */}
+      {markCenterFallback && !selectedPoint && activeHighlightGid == null && activeMarkerPoint && (
+        <>
+          <mesh position={activeMarkerPoint}>
+            <sphereGeometry args={[1.8, 16, 16]} />
+            <meshBasicMaterial color="#ffd166" depthTest={false} depthWrite={false} transparent opacity={0.95} />
+          </mesh>
+          <Html position={activeMarkerPoint} center zIndexRange={[22, 0]} transform={false} occlude={false}>
+            <div style={{ background: 'rgba(255, 209, 102, 0.96)', color: '#1a1a1a', padding: '3px 6px', borderRadius: 6, fontSize: 11, fontWeight: 700, boxShadow: '0 2px 6px rgba(0,0,0,0.35)', userSelect: 'none' }}>
+              Selected
+            </div>
+          </Html>
+        </>
       )}
 
       {/* No generic fallback marker to avoid misleading selection; rely on group/position highlights only */}
