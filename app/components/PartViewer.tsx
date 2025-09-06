@@ -31,6 +31,8 @@ type PartViewerProps = {
   onFeatureSelect?: (featureId: string | null) => void
   /** Called when the user clicks a planar face in the scene (groupId + 3D point) */
   onScenePick?: (args: { groupId: number; point: THREE.Vector3 }) => void
+  /** Optional externally controlled selected feature id */
+  selectedFeatureId?: string | null
 }
 
 /** ---------- helpers ---------- **/
@@ -428,6 +430,7 @@ export default function PartViewer({
   features = [],
   onFeatureSelect,
   onScenePick,
+  selectedFeatureId: selectedFeatureIdProp = null,
 }: PartViewerProps) {
   const [picked, setPicked] = useState<{ point: THREE.Vector3; groupId: number } | null>(null)
   const [autoRotate, setAutoRotate] = useState<boolean>(true)
@@ -437,8 +440,9 @@ export default function PartViewer({
   const [snapMode, setSnapMode] = useState<'none'|'face'|'vertex'>('none')
   const [units, setUnits] = useState<'mm'|'inch'>('mm')
 
-  // feature selection within the viewer (list click)
-  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
+  // feature selection within the viewer (list click) with optional external control
+  const [internalSelectedFeatureId, setInternalSelectedFeatureId] = useState<string | null>(null)
+  const selectedFeatureId = selectedFeatureIdProp ?? internalSelectedFeatureId
 
   const selectedFeature = useMemo(
     () => features.find((f) => f.id === selectedFeatureId) || null,
@@ -456,14 +460,14 @@ export default function PartViewer({
   // Scene pick -> bubble up (for your dashboard to map/record), also clear feature list selection
   const handleScenePick = ({ point, groupId }: { point: THREE.Vector3; groupId: number }) => {
     setPicked({ point, groupId })
-    setSelectedFeatureId(null)
+    setInternalSelectedFeatureId(null)
     onFeatureSelect?.(null)
     onScenePick?.({ groupId, point })
   }
 
   // Feature list click -> local selection + callback
   const handleFeatureClick = (f: Feature) => {
-    setSelectedFeatureId(f.id)
+    setInternalSelectedFeatureId(f.id)
     onFeatureSelect?.(f.id)
     setPicked(null) // switch to feature-driven highlight
   }

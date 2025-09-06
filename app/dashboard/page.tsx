@@ -1015,6 +1015,7 @@ __root__();
               key={`${renderVersion}`}
               stlUrl={stlBlobUrl}
               features={features}
+              selectedFeatureId={selectedFeatureId}
               onFeatureSelect={(id) => setSelectedFeatureId(id)}
               onScenePick={({ groupId, point }) => {
                 // Accept either a tuple or a Vector3 (works with both PartViewer typings)
