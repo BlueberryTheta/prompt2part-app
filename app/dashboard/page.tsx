@@ -771,6 +771,7 @@ __root__();
     return [
       `Apply these parameter values to ${title}.`,
       'Only update the listed parameters on this feature; do not change other features.',
+      'Keep the current operation (boss vs. cut) for all existing features unchanged. Do not introduce holes or subtractive cuts unless explicitly requested.',
       body,
     ].join('\n')
   }

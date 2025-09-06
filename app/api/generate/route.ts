@@ -325,16 +325,30 @@ function hasCutFeatures(spec: Spec): boolean {
 // rewrite to `union(){ ... ; SUBTRACT; }` so additive-only edits still render.
 function rewriteDifferenceIfNoCuts(code: string, spec: Spec): string {
   if (hasCutFeatures(spec)) return code
+
+  // 1) If the entire code is wrapped in a single outer difference(), rewrite just that block
   const outerDiff = code.match(/^\s*difference\s*\{\s*([\s\S]+)\s*\}\s*;?\s*$/i)
-  if (!outerDiff) return code
-  const inner = outerDiff[1]
-  const unionMatch = inner.match(/\bunion\s*\{\s*([\s\S]*?)\s*\}/i)
-  if (!unionMatch) return code
-  const unionBody = unionMatch[1].trim()
-  const afterUnion = inner.slice(inner.indexOf(unionMatch[0]) + unionMatch[0].length).trim()
-  const extras = afterUnion.replace(/^\s*;?/, '').replace(/\s*;?\s*$/, '')
-  const rebuilt = `union(){\n${unionBody}\n${extras ? '\n' + extras + '\n' : ''}}`
-  return rebuilt
+  if (outerDiff) {
+    const inner = outerDiff[1]
+    const unionMatch = inner.match(/\bunion\s*\{\s*([\s\S]*?)\s*\}/i)
+    if (unionMatch) {
+      const unionBody = unionMatch[1].trim()
+      const afterUnion = inner.slice(inner.indexOf(unionMatch[0]) + unionMatch[0].length).trim()
+      const extras = afterUnion.replace(/^\s*;?/, '').replace(/\s*;?\s*$/, '')
+      const rebuilt = `union(){\n${unionBody}\n${extras ? '\n' + extras + '\n' : ''}}`
+      return rebuilt
+    }
+  }
+
+  // 2) Heuristic: if spec has no cut features, but code still contains inner difference() blocks
+  // that subtract add-on primitives (e.g., cylinders for bosses), convert those inner differences
+  // to union() unless they appear to be hollowing (look for wall_thickness hint).
+  // This is a best-effort stability pass to avoid accidental holes.
+  const hasHollowHints = /wall_thickness|hollow/i.test(code)
+  if (!hasHollowHints) {
+    return code.replace(/\bdifference\s*\{/gi, 'union{')
+  }
+  return code
 }
 
 // Detect internal-only boss pattern
