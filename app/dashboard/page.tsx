@@ -465,6 +465,9 @@ __root__();
     // ✅ ALWAYS keep SPEC in sync with the server, even for `type: "questions"`
     if (data?.spec) {
       setSpec(data.spec as Spec)
+      // Also update the feature tree immediately so the UI reflects new features
+      // even during question/clarification turns (before rendering code).
+      try { mergeFeaturesFromSpec(data.spec as Spec) } catch {}
     }
 
     // Proceed to STL + (then) features only when we actually have code
