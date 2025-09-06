@@ -201,10 +201,35 @@ function safeParseJson(jsonish: string) {
   return JSON.parse(match[0])
 }
 
-function looksLikeSCAD(code: string) {
-  return /cube|cylinder|translate|difference|union|rotate|linear_extrude|sphere|polyhedron|intersection|hull|minkowski/i.test(
-    code
-  )
+function hasPrimitive(code: string) {
+  // Require at least one solid-creating primitive, not just CSG/transform keywords
+  return /\b(cube|cylinder|sphere|polyhedron|square\s*\(|circle\s*\(|polygon\s*\(|linear_extrude\s*\(|rotate_extrude\s*\()/.test(code)
+}
+
+// Attempt to synthesize minimal OpenSCAD from SPEC if code lacks geometry
+function synthesizeFromSpec(spec: Spec | undefined): string | null {
+  if (!spec) return null
+  const feats: any[] = Array.isArray((spec as any).features) ? ((spec as any).features as any[]) : []
+  if (feats.length === 0) return null
+  const parts: string[] = []
+  for (const f of feats) {
+    const t = String(f?.type || '').toLowerCase()
+    if (t === 'cube') {
+      const s = Number(f?.side_length ?? f?.dimensions?.side_length)
+      const w = Number(f?.dimensions?.width ?? s)
+      const h = Number(f?.dimensions?.height ?? s)
+      const d = Number(f?.dimensions?.depth ?? s)
+      const hasBox = Number.isFinite(w) && Number.isFinite(h) && Number.isFinite(d)
+      if (Number.isFinite(s)) parts.push(`cube([${s}, ${s}, ${s}], center=false);`)
+      else if (hasBox) parts.push(`cube([${w}, ${h}, ${d}], center=false);`)
+    } else if (t === 'cylinder') {
+      const dia = Number(f?.diameter ?? (Number(f?.radius) ? Number(f?.radius) * 2 : undefined) ?? f?.dimensions?.diameter)
+      const h = Number(f?.height ?? f?.dimensions?.height)
+      if (Number.isFinite(dia) && Number.isFinite(h)) parts.push(`cylinder(d=${dia}, h=${h}, center=false);`)
+    }
+  }
+  if (parts.length === 0) return null
+  return `// Synthesized from SPEC\nunion(){\n  ${parts.join('\n  ')}\n}`
 }
 
 // Convert "name = cube(...);" into "module name(){ cube(...); } name();"
@@ -792,7 +817,12 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
       } catch {}
     }
 
-    if (!looksLikeSCAD(code)) {
+  if (!hasPrimitive(code)) {
+    // Try to synthesize code from SPEC to avoid empty scene
+    const fallback = synthesizeFromSpec(mergedSpec)
+    if (fallback) {
+      code = fallback
+    } else {
       return NextResponse.json({
         type: 'questions',
         assistant_text: 'I still need a bit more info before I can safely generate code.',
@@ -801,6 +831,7 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
         actions: ['merged_spec', 'code_check_failed'],
       } satisfies ApiResp)
     }
+  }
 
     if (obviouslyInternalBoss(code)) {
       return NextResponse.json({
