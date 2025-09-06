@@ -133,6 +133,11 @@ Rules:
 - Prefer concrete numbers. Suggest typical ranges where helpful.
 - NEVER output code here.
 
+Include highlightable metadata for each feature you create or edit:
+- If placed relative to a face, include base_face/face as a string like "G11" (case-insensitive OK).
+- If a 3D point is known (from UI selection), include position.point: [x, y, z]. If you know a center, include position.center.
+- Do not invent coordinates; only include values you can infer from the request or selection.
+
 If UI_SELECTED_FEATURE is present, apply the change to that feature.
 For holders/brackets/clamps/enclosures/knobs/adapters, choose 2–3 key questions with defaults; otherwise proceed with reasonable assumptions.
 
@@ -741,6 +746,26 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
     mergedSpec = normalizeGeometryToFeatures(mergedSpec)
     mergedSpec = normalizeFacesInSpec(mergedSpec)
     mergedSpec = ensureFeatureIds(mergedSpec)
+
+    // Persist UI selection (face/point) as highlightable metadata on the selected feature when available
+    try {
+      if (selection && (selection as any).featureId) {
+        const fid = (selection as any).featureId as string
+        const feats: any[] = Array.isArray((mergedSpec as any).features) ? ((mergedSpec as any).features as any[]) : []
+        const f = feats.find((x: any) => (x?.feature_id || x?.id) === fid)
+        if (f) {
+          if (selection.faceIndex != null) {
+            const g = `G${selection.faceIndex}`
+            if (!f.base_face) f.base_face = g
+            if (!f.face) f.face = g
+            f.position = { ...(f.position || {}), face: g }
+          }
+          if (Array.isArray(selection.point) && selection.point.length === 3) {
+            f.position = { ...(f.position || {}), point: selection.point }
+          }
+        }
+      }
+    } catch {}
 
     // If the model did not provide adjustables, ask it for a minimal adaptive schema now (AI-only, no defaults)
     if (!adjustables || adjustables.length === 0) {
