@@ -197,6 +197,8 @@ async function openai(
     ? {
         model,
         input: messages.map(toResponseMessage),
+        modalities: ['text'],
+        response_format: { type: 'text' },
         max_output_tokens: max_tokens,
         // Responses endpoint currently rejects temperature
       }
@@ -252,6 +254,9 @@ async function openai(
       const text = pieces.map(part => part.trim()).filter(Boolean).join('\n').trim()
       if (text) return text
 
+      const fallback = extractTextValue(json).trim()
+      if (fallback) return fallback
+
       throw new Error('OpenAI response missing text content')
     }
 
@@ -280,20 +285,37 @@ function toResponseMessage(msg: Msg) {
   }
 }
 
-function extractTextValue(segment: any): string {
-  if (!segment) return ''
+function extractTextValue(segment: any, seen = new Set<any>()): string {
+  if (!segment || seen.has(segment)) return ''
   if (typeof segment === 'string') return segment
+  if (typeof segment !== 'object') return ''
+  seen.add(segment)
+
   if (Array.isArray(segment)) {
     return segment
-      .map(part => extractTextValue(part))
+      .map(part => extractTextValue(part, seen))
       .filter(Boolean)
       .join('')
   }
-  if (typeof segment === 'object') {
-    if (typeof segment.value === 'string') return segment.value
-    if (typeof segment.text === 'string') return segment.text
+
+  const pieces: string[] = []
+  const push = (value: any) => {
+    const textValue = extractTextValue(value, seen)
+    if (textValue && !pieces.includes(textValue)) pieces.push(textValue)
   }
-  return ''
+
+  if ('output_text' in segment) push((segment as any).output_text)
+  if ('value' in segment) push((segment as any).value)
+  if ('text' in segment) push((segment as any).text)
+  if ('content' in segment) push((segment as any).content)
+  if ('data' in segment) push((segment as any).data)
+  if ('message' in segment) push((segment as any).message)
+
+  for (const value of Object.values(segment)) {
+    if (value && typeof value === 'object') push(value)
+  }
+
+  return pieces.join('')
 }
 
 // ---------- utils ----------
