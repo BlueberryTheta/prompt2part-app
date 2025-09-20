@@ -198,7 +198,7 @@ async function openai(
         model,
         input: messages.map(toResponseMessage),
         max_output_tokens: max_tokens,
-        temperature,
+        // Responses endpoint currently rejects temperature
       }
     : {
         model,
