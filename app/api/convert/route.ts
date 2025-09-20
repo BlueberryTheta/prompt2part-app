@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+const OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
+
 export async function POST(req: NextRequest) {
   const { prompt, history = [] } = await req.json()
 
@@ -25,7 +27,7 @@ ask them exactly what is needed. Only provide code once the design is clear.`,
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: OPENAI_MODEL,
         messages,
         temperature: 0.3,
         max_tokens: 1000,

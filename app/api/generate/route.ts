@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 export const runtime = 'edge'
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
-const OPENAI_MODEL = 'gpt-4o'
+const OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
 
