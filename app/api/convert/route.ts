@@ -10,6 +10,22 @@ function toResponseMessage(msg: { role: string; content: string }) {
   }
 }
 
+function extractTextValue(segment: any): string {
+  if (!segment) return ''
+  if (typeof segment === 'string') return segment
+  if (Array.isArray(segment)) {
+    return segment
+      .map(part => extractTextValue(part))
+      .filter(Boolean)
+      .join('')
+  }
+  if (typeof segment === 'object') {
+    if (typeof segment.value === 'string') return segment.value
+    if (typeof segment.text === 'string') return segment.text
+  }
+  return ''
+}
+
 export async function POST(req: NextRequest) {
   const { prompt, history = [] } = await req.json()
 
@@ -85,9 +101,9 @@ ask them exactly what is needed. Only provide code once the design is clear.`,
         for (const item of outputs) {
           const content = Array.isArray(item?.content) ? item.content : []
           for (const chunk of content) {
-            if (chunk?.type === 'text') {
-              if (typeof chunk?.text === 'string') pieces.push(chunk.text)
-              else if (chunk?.text && typeof chunk.text?.value === 'string') pieces.push(chunk.text.value)
+            if (chunk?.type === 'text' || chunk?.type === 'output_text') {
+              const piece = extractTextValue(chunk?.text)
+              if (piece) pieces.push(piece)
             }
           }
         }
