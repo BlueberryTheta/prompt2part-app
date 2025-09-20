@@ -196,10 +196,7 @@ async function openai(
   const body = useResponses
     ? {
         model,
-        input: messages.map(msg => ({
-          role: msg.role,
-          content: [{ type: 'text', text: msg.content }],
-        })),
+        input: messages.map(toResponseMessage),
         max_output_tokens: max_tokens,
         temperature,
       }
@@ -272,6 +269,14 @@ async function openai(
     throw new Error('OpenAI response missing message content')
   } finally {
     clearTimeout(to)
+  }
+}
+
+function toResponseMessage(msg: Msg) {
+  const type = msg.role === 'assistant' ? 'output_text' : 'input_text'
+  return {
+    role: msg.role,
+    content: [{ type, text: msg.content }],
   }
 }
 

@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
 
+function toResponseMessage(msg: { role: string; content: string }) {
+  const type = msg.role === 'assistant' ? 'output_text' : 'input_text'
+  return {
+    role: msg.role,
+    content: [{ type, text: msg.content }],
+  }
+}
+
 export async function POST(req: NextRequest) {
   const { prompt, history = [] } = await req.json()
 
@@ -29,10 +37,7 @@ ask them exactly what is needed. Only provide code once the design is clear.`,
     const body = useResponses
       ? {
           model,
-          input: messages.map(msg => ({
-            role: msg.role,
-            content: [{ type: 'text', text: msg.content }],
-          })),
+          input: messages.map(toResponseMessage),
           max_output_tokens: 1000,
           temperature: 0.3,
         }
