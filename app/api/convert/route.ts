@@ -72,7 +72,6 @@ ask them exactly what is needed. Only provide code once the design is clear.`,
           model,
           input: messages.map(toResponseMessage),
           modalities: ['text'],
-          response_format: { type: 'text' },
           max_output_tokens: 1000,
           // Responses endpoint currently rejects temperature
         }
