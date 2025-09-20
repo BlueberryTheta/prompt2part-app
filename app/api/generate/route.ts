@@ -189,18 +189,87 @@ async function openai(
 ) {
   const ac = new AbortController()
   const to = setTimeout(() => ac.abort(), timeoutMs)
+  const model = OPENAI_MODEL
+  const useResponses = model.toLowerCase().startsWith('gpt-5')
+  const endpoint = useResponses ? 'https://api.openai.com/v1/responses' : OPENAI_URL
+
+  const body = useResponses
+    ? {
+        model,
+        input: messages.map(msg => ({
+          role: msg.role,
+          content: [{ type: 'text', text: msg.content }],
+        })),
+        max_output_tokens: max_tokens,
+        temperature,
+      }
+    : {
+        model,
+        messages,
+        max_tokens,
+        temperature,
+      }
+
   try {
-    const res = await fetch(OPENAI_URL, {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: 'Bearer ' + (process.env.OPENAI_API_KEY ?? ''),
+        ...(useResponses ? { 'OpenAI-Beta': 'assistants=v2' } : {}),
       },
-      body: JSON.stringify({ model: OPENAI_MODEL, messages, max_tokens, temperature }),
+      body: JSON.stringify(body),
       signal: ac.signal,
     })
-    const json = await res.json()
-    return json?.choices?.[0]?.message?.content ?? ''
+
+    const raw = await res.text()
+    if (!res.ok) {
+      throw new Error('OpenAI ' + res.status + ' ' + res.statusText + ': ' + raw.slice(0, 200))
+    }
+
+    let json: any = {}
+    if (raw) {
+      try {
+        json = JSON.parse(raw)
+      } catch {
+        throw new Error('OpenAI returned non-JSON payload')
+      }
+    }
+
+    if (useResponses) {
+      if (typeof json.output_text === 'string' && json.output_text.trim()) {
+        return json.output_text.trim()
+      }
+
+      const outputs = Array.isArray(json.output) ? json.output : []
+      const pieces: string[] = []
+      for (const item of outputs) {
+        const content = Array.isArray(item?.content) ? item.content : []
+        for (const chunk of content) {
+          if (chunk?.type === 'text') {
+            if (typeof chunk?.text === 'string') pieces.push(chunk.text)
+            else if (chunk?.text && typeof chunk.text?.value === 'string') pieces.push(chunk.text.value)
+          }
+        }
+      }
+      const text = pieces.map(part => part.trim()).filter(Boolean).join('\n').trim()
+      if (text) return text
+
+      throw new Error('OpenAI response missing text content')
+    }
+
+    const content = json?.choices?.[0]?.message?.content
+    if (typeof content === 'string' && content.trim()) return content
+    if (Array.isArray(content)) {
+      const text = content
+        .map((part: any) => (typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : ''))
+        .filter(Boolean)
+        .join('\n')
+        .trim()
+      if (text) return text
+    }
+
+    throw new Error('OpenAI response missing message content')
   } finally {
     clearTimeout(to)
   }
