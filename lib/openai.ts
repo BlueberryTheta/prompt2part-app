@@ -1,4 +1,4 @@
-﻿import OpenAI from 'openai'
+import OpenAI from 'openai'
 import type { ResponseInput } from 'openai/resources/responses/responses'
 
 export type ChatRole = 'system' | 'user' | 'assistant'
@@ -28,14 +28,25 @@ function toResponseInput(messages: ChatMessage[]): ResponseInput {
 }
 
 function collectResponseText(payload: any): string {
-  const pieces = new Set<string>()
+  const outputText = payload?.output_text ?? payload?.response?.output_text
+  if (typeof outputText === 'string') return outputText.trim()
+  if (Array.isArray(outputText)) {
+    const joined = outputText
+      .map(part => (typeof part === 'string' ? part.trim() : ''))
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+    if (joined) return joined
+  }
+
+  const pieces: string[] = []
   const seen = new WeakSet<object>()
 
   const visit = (value: any) => {
     if (value == null) return
     if (typeof value === 'string') {
       const trimmed = value.trim()
-      if (trimmed) pieces.add(trimmed)
+      if (trimmed) pieces.push(trimmed)
       return
     }
 
@@ -49,23 +60,19 @@ function collectResponseText(payload: any): string {
     if (seen.has(value)) return
     seen.add(value)
 
-    visit((value as any).output_text)
-    visit((value as any).text)
-    visit((value as any).value)
-    visit((value as any).content)
-    visit((value as any).message)
-
     for (const key of Object.keys(value)) {
       visit((value as any)[key])
     }
   }
 
-  visit(payload?.output_text)
-  visit(payload?.response?.output_text)
   visit(payload?.output)
   visit(payload)
 
-  return Array.from(pieces).join('\n').trim()
+  if (pieces.length > 0) {
+    return pieces.join('\n').trim()
+  }
+
+  return ''
 }
 
 export async function getOpenAIText({
@@ -128,4 +135,3 @@ export async function getOpenAIText({
     clearTimeout(timer)
   }
 }
-
