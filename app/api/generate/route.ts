@@ -727,9 +727,10 @@ export async function POST(req: NextRequest) {
       adjustAsk = Array.isArray(parsed.ask) ? parsed.ask : undefined
       adjustOptions = parsed.options || undefined
     } catch (e: any) {
-      console.error('Spec merge parse error:', e?.message, mergedRaw)
+      console.error(SPEC_DEBUG_PREFIX, 'Spec merge parse error', { error: e?.message, preview: previewText(mergedRaw) })
+      logSpecDebug('mergedRaw_parse_error', mergedRaw)
       return NextResponse.json({ error: 'Spec merge failed: invalid JSON' } as ApiResp, { status: 500 })
-}
+    }
 
 // Non-destructive merge: preserve existing features; overlay updates by feature_id/id; append new ones.
 function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Spec {
