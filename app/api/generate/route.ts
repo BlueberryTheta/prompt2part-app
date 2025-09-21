@@ -7,6 +7,18 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
 
 type Msg = ChatMessage
 
+const SPEC_DEBUG_PREFIX = '[SpecDebug]'
+
+function previewText(text: unknown, max = 400) {
+  if (typeof text !== 'string') return ''
+  return text.length > max ? text.slice(0, max) + '...' : text
+}
+
+function logSpecDebug(label: string, content: string) {
+  console.debug(SPEC_DEBUG_PREFIX, label, { length: content?.length, preview: previewText(content) })
+}
+
+
 export type Spec = {
   units?: 'mm' | 'inch'
   part_type?: string
@@ -199,10 +211,23 @@ async function openai(
 
 // ---------- utils ----------
 function safeParseJson(jsonish: string) {
+  if (typeof jsonish !== 'string') {
+    console.error(SPEC_DEBUG_PREFIX, 'safeParseJson: non-string input', { preview: previewText(String(jsonish)) })
+    throw new Error('Input must be string')
+  }
   const match = jsonish.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('No JSON block found')
-  return JSON.parse(match[0])
+  if (!match) {
+    console.error(SPEC_DEBUG_PREFIX, 'safeParseJson: no JSON block found', { preview: previewText(jsonish) })
+    throw new Error('No JSON block found')
+  }
+  try {
+    return JSON.parse(match[0])
+  } catch (err: any) {
+    console.error(SPEC_DEBUG_PREFIX, 'safeParseJson: JSON.parse failed', { preview: previewText(match[0]), error: err?.message })
+    throw err
+  }
 }
+
 
 function hasPrimitive(code: string) {
   // Require at least one solid-creating primitive, not just CSG/transform keywords
@@ -679,6 +704,7 @@ export async function POST(req: NextRequest) {
       },
     ]
     const mergedRaw = await openai(mergeMsg, 900, 0.1)
+    logSpecDebug('mergedRaw', mergedRaw)
 
     let mergedSpec: Spec = incomingSpec
     let assumptions: string[] = []
@@ -772,6 +798,7 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
           { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}\n\nIf applicable, base the objectType on the main feature or part_type.` },
         ]
         const schemaRaw = await openai(schemaMsg, 700, 0.2)
+        logSpecDebug('schemaRaw', schemaRaw)
         const schema = safeParseJson(schemaRaw)
         objectType = schema.objectType || objectType
         adjustables = Array.isArray(schema.adjustables) ? schema.adjustables : adjustables
@@ -826,6 +853,7 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
     },
   ]
   const codeRaw = await openai(codeMsg, 1800, 0.1)
+  logSpecDebug('codeRaw', codeRaw)
 
   // Sanitize & heal code
   let code = sanitizeOpenSCAD(codeRaw)
