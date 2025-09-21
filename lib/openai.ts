@@ -1,10 +1,11 @@
-import OpenAI from 'openai'
+﻿import OpenAI from 'openai'
 import type { ResponseInput } from 'openai/resources/responses/responses'
 
 export type ChatRole = 'system' | 'user' | 'assistant'
 export type ChatMessage = { role: ChatRole; content: string }
 
 const DEFAULT_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
+const DEBUG_PREFIX = '[OpenAI]'
 
 let cachedClient: OpenAI | null = null
 
@@ -27,8 +28,25 @@ function toResponseInput(messages: ChatMessage[]): ResponseInput {
   }))
 }
 
+function preview(value: unknown, length = 600): string {
+  try {
+    const json = JSON.stringify(value)
+    if (!json) return ''
+    return json.length > length ? json.slice(0, length) + '...' : json
+  } catch (err) {
+    if (typeof value === 'string') return value.slice(0, length)
+    return String(value)
+  }
+}
+
 function collectResponseText(payload: any): string {
   const outputText = payload?.output_text ?? payload?.response?.output_text
+  console.debug(DEBUG_PREFIX, 'collectResponseText: start', {
+    type: typeof outputText,
+    isArray: Array.isArray(outputText),
+    preview: preview(outputText, 200),
+  })
+
   if (typeof outputText === 'string') return outputText.trim()
   if (Array.isArray(outputText)) {
     const joined = outputText
@@ -69,8 +87,17 @@ function collectResponseText(payload: any): string {
   visit(payload)
 
   if (pieces.length > 0) {
+    console.debug(DEBUG_PREFIX, 'collectResponseText: assembled pieces', {
+      count: pieces.length,
+      preview: pieces.slice(0, 3).map(text => text.slice(0, 200)),
+    })
     return pieces.join('\n').trim()
   }
+
+  console.warn(DEBUG_PREFIX, 'collectResponseText: no text extracted', {
+    keys: payload ? Object.keys(payload) : [],
+    preview: preview(payload, 400),
+  })
 
   return ''
 }
@@ -104,9 +131,18 @@ export async function getOpenAIText({
         { signal: controller.signal }
       )
 
+      console.debug(DEBUG_PREFIX, 'responses.create result', {
+        model: resolvedModel,
+        outputTextType: typeof response?.output_text,
+        outputPreview: preview(response?.output_text, 200),
+        outputLength: Array.isArray(response?.output_text) ? response.output_text.length : undefined,
+        outputCount: Array.isArray(response?.output) ? response.output.length : undefined,
+      })
+
       const text = collectResponseText(response)
       if (!text) {
-        throw new Error('OpenAI response contained no text output')
+        const debugPreview = preview(response, 400)
+        throw new Error(`OpenAI response contained no text output (preview=${debugPreview})`)
       }
       return text
     }
@@ -121,12 +157,24 @@ export async function getOpenAIText({
       { signal: controller.signal }
     )
 
+    console.debug(DEBUG_PREFIX, 'chat.completions result', {
+      model: resolvedModel,
+      hasChoices: Array.isArray(completion?.choices),
+      preview: preview(completion?.choices?.[0]?.message?.content, 200),
+    })
+
     const text = completion.choices?.[0]?.message?.content?.trim()
     if (!text) {
-      throw new Error('OpenAI chat completion returned no message content')
+      const debugPreview = preview(completion, 400)
+      throw new Error(`OpenAI chat completion returned no message content (preview=${debugPreview})`)
     }
     return text
   } catch (error: any) {
+    console.error(DEBUG_PREFIX, 'getOpenAIText error', {
+      model: resolvedModel,
+      message: error?.message,
+      stack: error?.stack,
+    })
     if (error?.name === 'AbortError') {
       throw new Error('OpenAI request timed out')
     }
