@@ -1,11 +1,11 @@
-// app/api/generate/route.ts
+﻿// app/api/generate/route.ts
 import { NextRequest, NextResponse } from 'next/server'
+import { ChatMessage, getOpenAIText } from '@/lib/openai'
 export const runtime = 'edge'
 
-const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
 
-type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
+type Msg = ChatMessage
 
 export type Spec = {
   units?: 'mm' | 'inch'
@@ -139,7 +139,7 @@ Include highlightable metadata for each feature you create or edit:
 - Do not invent coordinates; only include values you can infer from the request or selection.
 
 If UI_SELECTED_FEATURE is present, apply the change to that feature.
-For holders/brackets/clamps/enclosures/knobs/adapters, choose 2–3 key questions with defaults; otherwise proceed with reasonable assumptions.
+For holders/brackets/clamps/enclosures/knobs/adapters, choose 2â€“3 key questions with defaults; otherwise proceed with reasonable assumptions.
 
 Positioning requirements:
 - For every NEW feature you create (cube, cylinder, hole, slot, etc.), ask the user for the desired position (center point in mm) unless it is obvious from context.
@@ -187,133 +187,14 @@ async function openai(
   temperature = 0.2,
   timeoutMs = 20000
 ) {
-  const ac = new AbortController()
-  const to = setTimeout(() => ac.abort(), timeoutMs)
-  const model = OPENAI_MODEL
-  const useResponses = model.toLowerCase().startsWith('gpt-5')
-  const endpoint = useResponses ? 'https://api.openai.com/v1/responses' : OPENAI_URL
-
-  const body = useResponses
-    ? {
-        model,
-        input: messages.map(toResponseMessage),
-        max_output_tokens: max_tokens,
-        // Responses endpoint currently rejects temperature
-      }
-    : {
-        model,
-        messages,
-        max_tokens,
-        temperature,
-      }
-
-  try {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + (process.env.OPENAI_API_KEY ?? ''),
-        ...(useResponses ? { 'OpenAI-Beta': 'assistants=v2' } : {}),
-      },
-      body: JSON.stringify(body),
-      signal: ac.signal,
-    })
-
-    const raw = await res.text()
-    if (!res.ok) {
-      throw new Error('OpenAI ' + res.status + ' ' + res.statusText + ': ' + raw.slice(0, 200))
-    }
-
-    let json: any = {}
-    if (raw) {
-      try {
-        json = JSON.parse(raw)
-      } catch {
-        throw new Error('OpenAI returned non-JSON payload')
-      }
-    }
-
-    if (useResponses) {
-      if (typeof json.output_text === 'string' && json.output_text.trim()) {
-        return json.output_text.trim()
-      }
-
-      const outputs = Array.isArray(json.output) ? json.output : []
-      const pieces: string[] = []
-      for (const item of outputs) {
-        const content = Array.isArray(item?.content) ? item.content : []
-        for (const chunk of content) {
-          if (chunk?.type === 'text' || chunk?.type === 'output_text') {
-            const piece = extractTextValue(chunk?.text)
-            if (piece) pieces.push(piece)
-          }
-        }
-      }
-      const text = pieces.map(part => part.trim()).filter(Boolean).join('\n').trim()
-      if (text) return text
-
-      const fallback = extractTextValue(json).trim()
-      if (fallback) return fallback
-
-      throw new Error('OpenAI response missing text content')
-    }
-
-    const content = json?.choices?.[0]?.message?.content
-    if (typeof content === 'string' && content.trim()) return content
-    if (Array.isArray(content)) {
-      const text = content
-        .map((part: any) => (typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : ''))
-        .filter(Boolean)
-        .join('\n')
-        .trim()
-      if (text) return text
-    }
-
-    throw new Error('OpenAI response missing message content')
-  } finally {
-    clearTimeout(to)
-  }
-}
-
-function toResponseMessage(msg: Msg) {
-  const type = msg.role === 'assistant' ? 'output_text' : 'input_text'
-  return {
-    role: msg.role,
-    content: [{ type, text: msg.content }],
-  }
-}
-
-function extractTextValue(segment: any, seen = new Set<any>()): string {
-  if (!segment || seen.has(segment)) return ''
-  if (typeof segment === 'string') return segment
-  if (typeof segment !== 'object') return ''
-  seen.add(segment)
-
-  if (Array.isArray(segment)) {
-    return segment
-      .map(part => extractTextValue(part, seen))
-      .filter(Boolean)
-      .join('')
-  }
-
-  const pieces: string[] = []
-  const push = (value: any) => {
-    const textValue = extractTextValue(value, seen)
-    if (textValue && !pieces.includes(textValue)) pieces.push(textValue)
-  }
-
-  if ('output_text' in segment) push((segment as any).output_text)
-  if ('value' in segment) push((segment as any).value)
-  if ('text' in segment) push((segment as any).text)
-  if ('content' in segment) push((segment as any).content)
-  if ('data' in segment) push((segment as any).data)
-  if ('message' in segment) push((segment as any).message)
-
-  for (const value of Object.values(segment)) {
-    if (value && typeof value === 'object') push(value)
-  }
-
-  return pieces.join('')
+  const isGpt5 = OPENAI_MODEL.toLowerCase().startsWith('gpt-5')
+  return getOpenAIText({
+    messages,
+    model: OPENAI_MODEL,
+    maxOutputTokens: max_tokens,
+    temperature: isGpt5 ? undefined : temperature,
+    timeoutMs,
+  })
 }
 
 // ---------- utils ----------
