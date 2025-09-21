@@ -47,51 +47,71 @@ function collectResponseText(payload: any): string {
     preview: preview(outputText, 200),
   })
 
-  if (typeof outputText === 'string') return outputText.trim()
-  if (Array.isArray(outputText)) {
-    const joined = outputText
-      .map(part => (typeof part === 'string' ? part.trim() : ''))
-      .filter(Boolean)
-      .join('\n')
-      .trim()
-    if (joined) return joined
+  const texts: string[] = []
+  const seenObjects = new WeakSet<object>()
+  const seenTexts = new Set<string>()
+
+  const addText = (candidate: any) => {
+    if (candidate == null) return
+    if (typeof candidate !== 'string') return
+    const trimmed = candidate.trim()
+    if (!trimmed) return
+    if (seenTexts.has(trimmed)) return
+    seenTexts.add(trimmed)
+    texts.push(trimmed)
   }
 
-  const pieces: string[] = []
-  const seen = new WeakSet<object>()
-
-  const visit = (value: any) => {
+  const walk = (value: any) => {
     if (value == null) return
     if (typeof value === 'string') {
-      const trimmed = value.trim()
-      if (trimmed) pieces.push(trimmed)
+      addText(value)
       return
     }
-
     if (typeof value !== 'object') return
 
     if (Array.isArray(value)) {
-      for (const item of value) visit(item)
+      for (const item of value) walk(item)
       return
     }
 
-    if (seen.has(value)) return
-    seen.add(value)
+    if (seenObjects.has(value)) return
+    seenObjects.add(value)
+
+    addText((value as any).text)
+    addText((value as any).value)
+
+    if (typeof (value as any).text === 'object') {
+      walk((value as any).text)
+    }
+
+    if (Array.isArray((value as any).content)) {
+      for (const item of (value as any).content) walk(item)
+    }
+
+    walk((value as any).output_text)
+    walk((value as any).message)
+    walk((value as any).data)
+    walk((value as any).response)
 
     for (const key of Object.keys(value)) {
-      visit((value as any)[key])
+      if (['text', 'value', 'content', 'output_text', 'message', 'data', 'response'].includes(key)) continue
+      walk((value as any)[key])
     }
   }
 
-  visit(payload?.output)
-  visit(payload)
+  if (Array.isArray(payload?.output)) {
+    for (const item of payload.output) walk(item)
+  }
 
-  if (pieces.length > 0) {
+  walk(outputText)
+  walk(payload)
+
+  if (texts.length > 0) {
     console.debug(DEBUG_PREFIX, 'collectResponseText: assembled pieces', {
-      count: pieces.length,
-      preview: pieces.slice(0, 3).map(text => text.slice(0, 200)),
+      count: texts.length,
+      preview: texts.slice(0, 3).map(text => text.slice(0, 200)),
     })
-    return pieces.join('\n').trim()
+    return texts.join('\n').trim()
   }
 
   console.warn(DEBUG_PREFIX, 'collectResponseText: no text extracted', {
@@ -122,29 +142,67 @@ export async function getOpenAIText({
 
   try {
     if (resolvedModel.toLowerCase().startsWith('gpt-5')) {
-      const response = await client.responses.create(
-        {
-          model: resolvedModel,
-          input: toResponseInput(messages),
-          max_output_tokens: maxOutputTokens,
-        },
-        { signal: controller.signal }
+      const tokenAttempts = Array.from(
+        new Set([
+          Math.max(1, maxOutputTokens ?? 1200),
+          Math.max(2000, maxOutputTokens ? Math.floor(maxOutputTokens * 1.8) : 2000),
+        ])
       )
 
-      console.debug(DEBUG_PREFIX, 'responses.create result', {
-        model: resolvedModel,
-        outputTextType: typeof response?.output_text,
-        outputPreview: preview(response?.output_text, 200),
-        outputLength: Array.isArray(response?.output_text) ? response.output_text.length : undefined,
-        outputCount: Array.isArray(response?.output) ? response.output.length : undefined,
-      })
+      let lastResponse: any = null
+      let lastReason: string | undefined
 
-      const text = collectResponseText(response)
-      if (!text) {
-        const debugPreview = preview(response, 400)
-        throw new Error(`OpenAI response contained no text output (preview=${debugPreview})`)
+      for (const tokens of tokenAttempts) {
+        console.debug(DEBUG_PREFIX, 'responses.create attempt', {
+          model: resolvedModel,
+          max_output_tokens: tokens,
+        })
+
+        const response = await client.responses.create(
+          {
+            model: resolvedModel,
+            input: toResponseInput(messages),
+            max_output_tokens: tokens,
+          },
+          { signal: controller.signal }
+        )
+
+        console.debug(DEBUG_PREFIX, 'responses.create result', {
+          model: resolvedModel,
+          status: response?.status,
+          incompleteReason: response?.incomplete_details?.reason,
+          outputTextType: typeof response?.output_text,
+          outputPreview: preview(response?.output_text, 200),
+          outputLength: Array.isArray(response?.output_text) ? response.output_text.length : undefined,
+          outputCount: Array.isArray(response?.output) ? response.output.length : undefined,
+        })
+
+        lastResponse = response
+        lastReason = response?.incomplete_details?.reason
+
+        const text = collectResponseText(response)
+        if (text) {
+          if (response?.status === 'incomplete') {
+            console.warn(DEBUG_PREFIX, 'responses.create returned incomplete status but extracted text', {
+              reason: lastReason,
+            })
+          }
+          return text
+        }
+
+        if (response?.status !== 'incomplete' || lastReason !== 'max_output_tokens') {
+          break
+        }
+
+        console.warn(DEBUG_PREFIX, 'responses.create incomplete due to max_output_tokens, retrying', {
+          attemptedTokens: tokens,
+          nextAttemptExists: tokens !== tokenAttempts[tokenAttempts.length - 1],
+        })
       }
-      return text
+
+      const previewPayload = preview(lastResponse, 400)
+      const reason = lastReason ? ` reason=${lastReason}` : ''
+      throw new Error(`OpenAI response contained no text output${reason} (preview=${previewPayload})`)
     }
 
     const completion = await client.chat.completions.create(
