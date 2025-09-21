@@ -1,4 +1,5 @@
 ﻿import OpenAI from 'openai'
+import type { ResponseInput } from 'openai/resources/responses/responses'
 
 export type ChatRole = 'system' | 'user' | 'assistant'
 export type ChatMessage = { role: ChatRole; content: string }
@@ -18,10 +19,11 @@ function ensureClient() {
   return cachedClient
 }
 
-function toResponseInput(messages: ChatMessage[]) {
+function toResponseInput(messages: ChatMessage[]): ResponseInput {
   return messages.map(message => ({
     role: message.role,
-    content: [{ type: 'text', text: message.content }],
+    content: [{ type: 'input_text', text: message.content }],
+    type: 'message',
   }))
 }
 
@@ -126,3 +128,4 @@ export async function getOpenAIText({
     clearTimeout(timer)
   }
 }
+
