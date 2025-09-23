@@ -1,4 +1,4 @@
-﻿import OpenAI from 'openai'
+import OpenAI from 'openai'
 import type { ResponseInput } from 'openai/resources/responses/responses'
 
 export type ChatRole = 'system' | 'user' | 'assistant'
@@ -212,7 +212,7 @@ export async function getOpenAIText({
             .map(t => Math.min(t, MAX_OUTPUT_CAP))
             .filter(t => t > 0)
         )
-      ).sort((a, b) => a - b) => b - a)
+      ).sort((a, b) => a - b)
 
       let lastResponse: any = null
       let lastReason: string | undefined
@@ -352,6 +352,7 @@ export async function getOpenAIText({
     }
   }
 }
+
 
 
 
