@@ -14,29 +14,31 @@ function CallbackHandler() {
       const code = searchParams.get('code')
       if (!code) {
         console.error('No auth code found in URL')
-        return router.push('/login')
+        router.push('/login')
+        return
       }
 
       const { data, error } = await supabase.auth.exchangeCodeForSession(code)
 
       if (error) {
         console.error('Error exchanging code:', error.message)
-        return router.push('/login')
+        router.push('/login')
+        return
       }
 
-      console.log('✅ Session established:', data.session)
+      console.log('Session established:', data.session)
       router.push('/dashboard')
     }
 
     exchangeCode()
   }, [searchParams, router])
 
-  return <p className="text-center p-4">🔄 Finishing login…</p>
+  return <p className='text-center p-4'>Finishing login...</p>
 }
 
 export default function AuthCallbackPage() {
   return (
-    <Suspense fallback={<p className="text-center p-4">🔄 Loading…</p>}>
+    <Suspense fallback={<p className='text-center p-4'>Loading...</p>}>
       <CallbackHandler />
     </Suspense>
   )

@@ -1,4 +1,4 @@
-﻿import OpenAI from 'openai'
+import OpenAI from 'openai'
 import type { ResponseInput } from 'openai/resources/responses/responses'
 
 export type ChatRole = 'system' | 'user' | 'assistant'
@@ -40,71 +40,80 @@ function preview(value: unknown, length = 600): string {
 }
 
 function collectResponseText(payload: any): string {
-  const outputText = payload?.output_text ?? payload?.response?.output_text
-  console.debug(DEBUG_PREFIX, 'collectResponseText: start', {
-    type: typeof outputText,
-    isArray: Array.isArray(outputText),
-    preview: preview(outputText, 200),
-  })
-
   const texts: string[] = []
-  const seenObjects = new WeakSet<object>()
   const seenTexts = new Set<string>()
+  const seenObjects = new WeakSet<object>()
 
-  const addText = (candidate: any) => {
-    if (candidate == null) return
-    if (typeof candidate !== 'string') return
-    const trimmed = candidate.trim()
-    if (!trimmed) return
-    if (seenTexts.has(trimmed)) return
+  const pushText = (value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed || seenTexts.has(trimmed)) return
     seenTexts.add(trimmed)
     texts.push(trimmed)
   }
 
-  const walk = (value: any) => {
+  const readTextLike = (value: any): void => {
     if (value == null) return
     if (typeof value === 'string') {
-      addText(value)
+      pushText(value)
       return
     }
-    if (typeof value !== 'object') return
-
     if (Array.isArray(value)) {
-      for (const item of value) walk(item)
+      for (const item of value) readTextLike(item)
       return
     }
-
-    if (seenObjects.has(value)) return
-    seenObjects.add(value)
-
-    addText((value as any).text)
-    addText((value as any).value)
-
-    if (typeof (value as any).text === 'object') {
-      walk((value as any).text)
-    }
-
-    if (Array.isArray((value as any).content)) {
-      for (const item of (value as any).content) walk(item)
-    }
-
-    walk((value as any).output_text)
-    walk((value as any).message)
-    walk((value as any).data)
-    walk((value as any).response)
-
-    for (const key of Object.keys(value)) {
-      if (['text', 'value', 'content', 'output_text', 'message', 'data', 'response'].includes(key)) continue
-      walk((value as any)[key])
+    if (typeof value === 'object') {
+      if (seenObjects.has(value)) return
+      seenObjects.add(value)
+      if ('value' in value) readTextLike((value as any).value)
+      if ('text' in value) readTextLike((value as any).text)
     }
   }
 
-  if (Array.isArray(payload?.output)) {
-    for (const item of payload.output) walk(item)
+  const processContent = (content: any): void => {
+    if (content == null) return
+    if (Array.isArray(content)) {
+      for (const item of content) processContent(item)
+      return
+    }
+    if (typeof content !== 'object') return
+
+    const type = (content as any).type
+    if (type === 'message') {
+      processContent((content as any).content)
+      return
+    }
+    if (type === 'output_text' || type === 'text') {
+      readTextLike((content as any).text ?? (content as any).value)
+    }
   }
 
-  walk(outputText)
-  walk(payload)
+  const processResponse = (response: any): void => {
+    if (response == null || typeof response !== 'object') return
+
+    if (typeof (response as any).output_text === 'string') {
+      readTextLike((response as any).output_text)
+    } else if (Array.isArray((response as any).output_text)) {
+      for (const item of (response as any).output_text) {
+        readTextLike(item)
+      }
+    }
+
+    if (Array.isArray((response as any).output)) {
+      for (const item of (response as any).output) {
+        processContent(item)
+      }
+    }
+  }
+
+  processResponse(payload)
+  if (payload?.response && payload.response !== payload) {
+    processResponse(payload.response)
+  }
+  if (Array.isArray(payload?.data)) {
+    for (const item of payload.data) {
+      processResponse(item)
+    }
+  }
 
   if (texts.length > 0) {
     console.debug(DEBUG_PREFIX, 'collectResponseText: assembled pieces', {
@@ -121,19 +130,20 @@ function collectResponseText(payload: any): string {
 
   return ''
 }
-
 export async function getOpenAIText({
   messages,
   model = DEFAULT_MODEL,
   maxOutputTokens = 1200,
   temperature,
   timeoutMs = 20000,
+  validate,
 }: {
   messages: ChatMessage[]
   model?: string
   maxOutputTokens?: number
   temperature?: number
   timeoutMs?: number
+  validate?: (text: string) => boolean
 }): Promise<string> {
   const client = ensureClient()
   const resolvedModel = model || DEFAULT_MODEL
@@ -146,13 +156,15 @@ export async function getOpenAIText({
         new Set([
           Math.max(1, maxOutputTokens ?? 1200),
           Math.max(2000, maxOutputTokens ? Math.floor(maxOutputTokens * 1.8) : 2000),
+          Math.max(4000, maxOutputTokens ? Math.floor(maxOutputTokens * 3) : 4000),
         ])
-      )
+      ).sort((a, b) => a - b)
 
       let lastResponse: any = null
       let lastReason: string | undefined
+      let fallbackText: string | null = null
 
-      for (const tokens of tokenAttempts) {
+      for (const [index, tokens] of tokenAttempts.entries()) {
         console.debug(DEBUG_PREFIX, 'responses.create attempt', {
           model: resolvedModel,
           max_output_tokens: tokens,
@@ -181,23 +193,51 @@ export async function getOpenAIText({
         lastReason = response?.incomplete_details?.reason
 
         const text = collectResponseText(response)
+        const reason = lastReason
+        const isIncomplete = response?.status === 'incomplete'
+        const isMaxTokenIncomplete = isIncomplete && reason === 'max_output_tokens'
+        const hasNextAttempt = index < tokenAttempts.length - 1
+
         if (text) {
-          if (response?.status === 'incomplete') {
+          if (validate && !validate(text)) {
+            console.warn(DEBUG_PREFIX, 'responses.create text failed validation', {
+              model: resolvedModel,
+              preview: preview(text, 200),
+              reason,
+            })
+            continue
+          }
+          if (isMaxTokenIncomplete && hasNextAttempt) {
+            console.warn(DEBUG_PREFIX, 'responses.create incomplete due to max_output_tokens, retrying after partial text', {
+              attemptedTokens: tokens,
+              nextAttemptTokens: tokenAttempts[index + 1],
+            })
+            fallbackText = text
+            continue
+          }
+          if (isIncomplete) {
             console.warn(DEBUG_PREFIX, 'responses.create returned incomplete status but extracted text', {
-              reason: lastReason,
+              reason,
             })
           }
           return text
         }
 
-        if (response?.status !== 'incomplete' || lastReason !== 'max_output_tokens') {
+        if (!isMaxTokenIncomplete) {
           break
         }
 
         console.warn(DEBUG_PREFIX, 'responses.create incomplete due to max_output_tokens, retrying', {
           attemptedTokens: tokens,
-          nextAttemptExists: tokens !== tokenAttempts[tokenAttempts.length - 1],
+          nextAttemptExists: hasNextAttempt,
         })
+      }
+
+      if (fallbackText) {
+        console.warn(DEBUG_PREFIX, 'responses.create returning last incomplete text after retries', {
+          reason: lastReason,
+        })
+        return fallbackText
       }
 
       const previewPayload = preview(lastResponse, 400)
@@ -226,6 +266,13 @@ export async function getOpenAIText({
       const debugPreview = preview(completion, 400)
       throw new Error(`OpenAI chat completion returned no message content (preview=${debugPreview})`)
     }
+    if (validate && !validate(text)) {
+      console.warn(DEBUG_PREFIX, 'chat.completions text failed validation', {
+        model: resolvedModel,
+        preview: preview(text, 200),
+      })
+      throw new Error('OpenAI text failed validation')
+    }
     return text
   } catch (error: any) {
     console.error(DEBUG_PREFIX, 'getOpenAIText error', {
@@ -241,4 +288,5 @@ export async function getOpenAIText({
     clearTimeout(timer)
   }
 }
+
 
