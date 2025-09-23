@@ -1,4 +1,4 @@
-import OpenAI from 'openai'
+﻿import OpenAI from 'openai'
 import type { ResponseInput } from 'openai/resources/responses/responses'
 
 export type ChatRole = 'system' | 'user' | 'assistant'
@@ -6,6 +6,10 @@ export type ChatMessage = { role: ChatRole; content: string }
 
 const DEFAULT_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
 const DEBUG_PREFIX = '[OpenAI]'
+
+// Hard cap for output tokens to avoid very long/expensive calls.
+// Override on Vercel/ENV with OPENAI_MAX_OUTPUT_TOKENS.
+const MAX_OUTPUT_CAP = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || '') || 2000
 
 let cachedClient: OpenAI | null = null
 
@@ -200,12 +204,15 @@ export async function getOpenAIText({
   try {
     if (resolvedModel.toLowerCase().startsWith('gpt-5')) {
       const tokenAttempts = Array.from(
-        new Set([
-          Math.max(1, maxOutputTokens ?? 1200),
-          Math.max(2000, maxOutputTokens ? Math.floor(maxOutputTokens * 1.8) : 2000),
-          Math.max(4000, maxOutputTokens ? Math.floor(maxOutputTokens * 3) : 4000),
-        ])
-      ).sort((a, b) => b - a)
+        new Set(
+          [
+            Math.max(1, maxOutputTokens ?? 1200),
+            Math.max(1500, maxOutputTokens ? Math.floor(maxOutputTokens * 1.5) : 1500),
+          ]
+            .map(t => Math.min(t, MAX_OUTPUT_CAP))
+            .filter(t => t > 0)
+        )
+      ).sort((a, b) => a - b) => b - a)
 
       let lastResponse: any = null
       let lastReason: string | undefined
