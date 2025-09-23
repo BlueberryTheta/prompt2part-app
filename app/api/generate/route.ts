@@ -1,7 +1,7 @@
 // app/api/generate/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { ChatMessage, getOpenAIText } from '@/lib/openai'
-export const runtime = 'edge'
+export const runtime = 'nodejs'
 export const maxDuration = 60
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
@@ -925,4 +925,5 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
     return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 })
   }
 }
+
 

@@ -1,4 +1,4 @@
-import OpenAI from 'openai'
+﻿import OpenAI from 'openai'
 import type { ResponseInput } from 'openai/resources/responses/responses'
 
 export type ChatRole = 'system' | 'user' | 'assistant'
@@ -203,16 +203,14 @@ export async function getOpenAIText({
 
   try {
     if (resolvedModel.toLowerCase().startsWith('gpt-5')) {
-      const tokenAttempts = Array.from(
-        new Set(
-          [
-            Math.max(1, maxOutputTokens ?? 1200),
-            Math.max(1500, maxOutputTokens ? Math.floor(maxOutputTokens * 1.5) : 1500),
-          ]
-            .map(t => Math.min(t, MAX_OUTPUT_CAP))
-            .filter(t => t > 0)
+      const firstTokens = Math.min(
+        MAX_OUTPUT_CAP,
+        Math.max(
+          maxOutputTokens ?? 1200,
+          (maxOutputTokens ? Math.floor(maxOutputTokens * 1.5) : 1500)
         )
-      ).sort((a, b) => a - b)
+      )
+      const tokenAttempts = [firstTokens]
 
       let lastResponse: any = null
       let lastReason: string | undefined
