@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ChatMessage, getOpenAIText } from '@/lib/openai'
 export const runtime = 'edge'
+export const maxDuration = 60
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
 
@@ -203,7 +204,7 @@ async function openai(
   messages: Msg[],
   max_tokens = 1200,
   temperature = 0.2,
-  timeoutMs = 20000,
+  timeoutMs = 45000,
   validate?: (text: string) => boolean
 ) {
   const isGpt5 = OPENAI_MODEL.toLowerCase().startsWith('gpt-5')
@@ -711,7 +712,7 @@ export async function POST(req: NextRequest) {
           prompt,
       },
     ]
-    const mergedRaw = await openai(mergeMsg, 900, 0.1, 20000, isLikelyJson)
+    const mergedRaw = await openai(mergeMsg, 900, 0.1, 45000, isLikelyJson)
     logSpecDebug('mergedRaw', mergedRaw)
 
     let mergedSpec: Spec = incomingSpec
@@ -806,7 +807,7 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
           { role: 'system', content: `You are a UI schema generator. Return STRICT JSON with keys: { "objectType": string, "params": object, "adjustables": Array, "ask": string[], "options": object }. Include ONLY the parameters the user should edit now for the current object. Use dot-paths for nested keys (e.g., position.x). Do not invent irrelevant defaults. Keep adjustables concise and relevant.` },
           { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}\n\nIf applicable, base the objectType on the main feature or part_type.` },
         ]
-        const schemaRaw = await openai(schemaMsg, 700, 0.2, 20000, isLikelyJson)
+        const schemaRaw = await openai(schemaMsg, 700, 0.2, 45000, isLikelyJson)
         logSpecDebug('schemaRaw', schemaRaw)
         const schema = safeParseJson(schemaRaw)
         objectType = schema.objectType || objectType
@@ -924,3 +925,4 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
     return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 })
   }
 }
+

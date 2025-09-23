@@ -43,77 +43,113 @@ function collectResponseText(payload: any): string {
   const texts: string[] = []
   const seenTexts = new Set<string>()
   const seenObjects = new WeakSet<object>()
+  const metadataKeys = new Set([
+    'background',
+    'billing',
+    'completion_tokens',
+    'created_at',
+    'error',
+    'finish_reason',
+    'id',
+    'index',
+    'instructions',
+    'max_output_tokens',
+    'max_tool_calls',
+    'metadata',
+    'model',
+    'object',
+    'parallel_tool_calls',
+    'previous_response_id',
+    'prompt_cache_key',
+    'prompt_tokens',
+    'reason',
+    'safety_identifier',
+    'service_tier',
+    'status',
+    'store',
+    'temperature',
+    'tool_choice',
+    'tools',
+    'top_logprobs',
+    'top_p',
+    'total_tokens',
+    'truncation',
+    'usage',
+    'user',
+    'type',
+    'role',
+  ])
+  const skipPatterns = [
+    /^rs_[A-Za-z0-9]+$/,
+    /^resp_[A-Za-z0-9]+$/,
+    /^run_[A-Za-z0-9]+$/,
+    /^gpt-[\w-]+$/,
+  ]
 
-  const pushText = (value: string) => {
-    const trimmed = value.trim()
-    if (!trimmed || seenTexts.has(trimmed)) return
+  const shouldSkip = (value: string, key?: string) => {
+    const trimmed = value?.trim()
+    if (!trimmed) return true
+    if (key && metadataKeys.has(key)) return true
+    for (const pattern of skipPatterns) {
+      if (pattern.test(trimmed)) return true
+    }
+    return false
+  }
+
+  const addText = (candidate: string, key?: string) => {
+    if (shouldSkip(candidate, key)) return
+    const trimmed = candidate.trim()
+    if (seenTexts.has(trimmed)) return
     seenTexts.add(trimmed)
     texts.push(trimmed)
   }
 
-  const readTextLike = (value: any): void => {
+  const visit = (value: any, key?: string) => {
     if (value == null) return
     if (typeof value === 'string') {
-      pushText(value)
+      addText(value, key)
       return
     }
+    if (typeof value !== 'object') return
     if (Array.isArray(value)) {
-      for (const item of value) readTextLike(item)
+      for (const item of value) visit(item, key)
       return
     }
-    if (typeof value === 'object') {
-      if (seenObjects.has(value)) return
-      seenObjects.add(value)
-      if ('value' in value) readTextLike((value as any).value)
-      if ('text' in value) readTextLike((value as any).text)
-    }
-  }
+    if (seenObjects.has(value)) return
+    seenObjects.add(value)
 
-  const processContent = (content: any): void => {
-    if (content == null) return
-    if (Array.isArray(content)) {
-      for (const item of content) processContent(item)
-      return
-    }
-    if (typeof content !== 'object') return
+    if ('text' in value) visit((value as any).text, 'text')
+    if ('value' in value) visit((value as any).value, 'value')
+    if ('output_text' in value) visit((value as any).output_text, 'output_text')
+    if ('content' in value) visit((value as any).content, 'content')
+    if ('message' in value) visit((value as any).message, 'message')
+    if ('data' in value) visit((value as any).data, 'data')
+    if ('response' in value) visit((value as any).response, 'response')
 
-    const type = (content as any).type
-    if (type === 'message') {
-      processContent((content as any).content)
-      return
-    }
-    if (type === 'output_text' || type === 'text') {
-      readTextLike((content as any).text ?? (content as any).value)
-    }
-  }
-
-  const processResponse = (response: any): void => {
-    if (response == null || typeof response !== 'object') return
-
-    if (typeof (response as any).output_text === 'string') {
-      readTextLike((response as any).output_text)
-    } else if (Array.isArray((response as any).output_text)) {
-      for (const item of (response as any).output_text) {
-        readTextLike(item)
+    for (const [childKey, childValue] of Object.entries(value)) {
+      if (
+        childKey === 'text' ||
+        childKey === 'value' ||
+        childKey === 'output_text' ||
+        childKey === 'content' ||
+        childKey === 'message' ||
+        childKey === 'data' ||
+        childKey === 'response'
+      ) {
+        continue
       }
-    }
-
-    if (Array.isArray((response as any).output)) {
-      for (const item of (response as any).output) {
-        processContent(item)
-      }
+      if (metadataKeys.has(childKey)) continue
+      visit(childValue, childKey)
     }
   }
 
-  processResponse(payload)
-  if (payload?.response && payload.response !== payload) {
-    processResponse(payload.response)
-  }
-  if (Array.isArray(payload?.data)) {
-    for (const item of payload.data) {
-      processResponse(item)
-    }
-  }
+  visit(payload?.output_text, 'output_text')
+  visit(payload?.text, 'text')
+  visit(payload?.response?.output_text, 'output_text')
+  visit(payload?.response?.text, 'text')
+  visit(payload?.data, 'data')
+  visit(payload?.output, 'output')
+  visit(payload)
 
   if (texts.length > 0) {
     console.debug(DEBUG_PREFIX, 'collectResponseText: assembled pieces', {
@@ -130,6 +166,7 @@ function collectResponseText(payload: any): string {
 
   return ''
 }
+
 export async function getOpenAIText({
   messages,
   model = DEFAULT_MODEL,
@@ -148,7 +185,17 @@ export async function getOpenAIText({
   const client = ensureClient()
   const resolvedModel = model || DEFAULT_MODEL
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+
+  const refreshTimeout = () => {
+    if (!timeoutMs || timeoutMs <= 0) {
+      return
+    }
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle)
+    }
+    timeoutHandle = setTimeout(() => controller.abort(), timeoutMs)
+  }
 
   try {
     if (resolvedModel.toLowerCase().startsWith('gpt-5')) {
@@ -158,13 +205,15 @@ export async function getOpenAIText({
           Math.max(2000, maxOutputTokens ? Math.floor(maxOutputTokens * 1.8) : 2000),
           Math.max(4000, maxOutputTokens ? Math.floor(maxOutputTokens * 3) : 4000),
         ])
-      ).sort((a, b) => a - b)
+      ).sort((a, b) => b - a)
 
       let lastResponse: any = null
       let lastReason: string | undefined
       let fallbackText: string | null = null
 
       for (const [index, tokens] of tokenAttempts.entries()) {
+        refreshTimeout()
+
         console.debug(DEBUG_PREFIX, 'responses.create attempt', {
           model: resolvedModel,
           max_output_tokens: tokens,
@@ -245,6 +294,8 @@ export async function getOpenAIText({
       throw new Error(`OpenAI response contained no text output${reason} (preview=${previewPayload})`)
     }
 
+
+
     const completion = await client.chat.completions.create(
       {
         model: resolvedModel,
@@ -280,13 +331,20 @@ export async function getOpenAIText({
       message: error?.message,
       stack: error?.stack,
     })
-    if (error?.name === 'AbortError') {
+    if (
+      error?.name === 'AbortError' ||
+      controller.signal.aborted ||
+      (typeof error?.message === 'string' && error.message.toLowerCase().includes('aborted'))
+    ) {
       throw new Error('OpenAI request timed out')
     }
     throw error
   } finally {
-    clearTimeout(timer)
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle)
+    }
   }
 }
+
 
 
