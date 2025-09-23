@@ -158,7 +158,7 @@ Include highlightable metadata for each feature you create or edit:
 - Do not invent coordinates; only include values you can infer from the request or selection.
 
 If UI_SELECTED_FEATURE is present, apply the change to that feature.
-For holders/brackets/clamps/enclosures/knobs/adapters, choose 2â€“3 key questions with defaults; otherwise proceed with reasonable assumptions.
+For holders/brackets/clamps/enclosures/knobs/adapters, choose 2Ã¢â‚¬â€œ3 key questions with defaults; otherwise proceed with reasonable assumptions.
 
 Positioning requirements:
 - For every NEW feature you create (cube, cylinder, hole, slot, etc.), ask the user for the desired position (center point in mm) unless it is obvious from context.
@@ -541,7 +541,7 @@ function fixBrokenEmptyCalls(code: string) {
   return out
 }
 
-export function sanitizeOpenSCAD(rawish: string) {
+function sanitizeOpenSCAD(rawish: string) {
   let raw = (rawish || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').trim();
 
   // Strip fences if present
@@ -557,7 +557,7 @@ export function sanitizeOpenSCAD(rawish: string) {
   // Heal common syntax glitches (e.g. "center=true} )")
   raw = fixCommonSyntaxScad(raw);
 
-  // 🔧 NEW: heal missing semicolons before '}' and at EOF
+  // ðŸ”§ NEW: heal missing semicolons before '}' and at EOF
   raw = fixMissingSemicolonsNearBraces(raw);
 
   // Fix broken or empty call endings
@@ -921,9 +921,10 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
       actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults', 'generated_code'],
     } satisfies ApiResp)
   } catch (err: any) {
-    console.error('🛑 /api/generate fatal error:', err?.message || err)
+    console.error('ðŸ›‘ /api/generate fatal error:', err?.message || err)
     return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 })
   }
 }
+
 
 
