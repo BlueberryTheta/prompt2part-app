@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 export const runtime = 'edge'
 
 // Reuse the sanitizer from generate route
-import { sanitizeOpenSCAD } from '../generate/route'
+import { sanitizeOpenSCAD } from '@/lib/scad'
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,4 +14,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: e?.message || 'sanitize error' }, { status: 500 })
   }
 }
+
 
