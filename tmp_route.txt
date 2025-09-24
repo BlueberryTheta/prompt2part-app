@@ -867,6 +867,19 @@ export async function POST(req: NextRequest) {
       const msg = String(e?.message || '')
       console.warn(SPEC_DEBUG_PREFIX, 'simple path failed', { error: msg })
       if (msg.toLowerCase().includes('timed out')) {
+        // If defaults were accepted or prompt requests proceeding with defaults, synthesize a quick model
+        const wantsDefaults = acceptDefaults || /default/i.test(String(prompt || ''))
+        const quick = wantsDefaults ? quickFallbackCode(prompt, shortHistory) : null
+        if (quick) {
+          const code = sanitizeOpenSCAD(quick.code)
+          return NextResponse.json({
+            type: 'code',
+            assistant_text: quick.note,
+            spec: incomingSpec,
+            code,
+            actions: ['quick_fallback_code'],
+          } satisfies ApiResp)
+        }
         return NextResponse.json({ error: 'OpenAI request timed out' }, { status: 504 })
       }
       // else: fall through to full flow
@@ -1114,6 +1127,8 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
     return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 })
   }
 }
+
+
 
 
 
