@@ -244,7 +244,7 @@ export async function getOpenAIText({
           truncation: 'auto' as any,
         }
         if (responseFormatJson) {
-          ;(payload as any).text = { format: 'json_object' }
+          ;(payload as any).text = { format: { type: 'json_object' } }
         }
         const response = await client.responses.create(
           payload,
