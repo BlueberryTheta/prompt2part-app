@@ -31,6 +31,27 @@ function isLikelyJson(text: string) {
   return trimmed.startsWith('{') || trimmed.startsWith('[')
 }
 
+// --------- simplified single-call path (fast path) ---------
+function sysPromptSimple() {
+  return `
+You are an OpenSCAD assistant.
+
+Task:
+- If the user provided enough info (dimensions, counts, positions) to build a reasonable first model, return code.
+- If not, ask up to 3 short, specific questions to gather the missing dimensions.
+
+Output format (STRICT JSON only):
+{"type":"questions","assistant_text": string, "questions": string[]} OR
+{"type":"code","assistant_text": string, "code": string}
+
+When type == "code":
+- Return ONLY valid OpenSCAD in the code field (no markdown, no fences, no '$fn').
+- Include a small parameter block at the top using simple snake_case variables.
+- Ensure at least one solid primitive and a single top-level union()/difference().
+- If CURRENT_CODE is provided, modify it minimally and preserve positions/transforms.
+`.trim()
+}
+
 // Truncate long text by keeping head and tail with a marker, to preserve
 // important headers and endings (useful for code and pretty-printed JSON).
 function truncateMiddle(text: string, maxChars: number): string {
@@ -726,9 +747,55 @@ export async function POST(req: NextRequest) {
       (await req.json()) as ApiReq
 
     // Keep history short to reduce latency and cost
-    const shortHistory = history.slice(-8)
+    const shortHistory = history.slice(-4)
 
-    // 1) merge spec
+    // Attempt a simplified single-call path first for speed
+    try {
+      const lastAssistant = [...shortHistory].reverse().find(m => m.role === 'assistant')?.content || ''
+      let safeCurrent = typeof currentCode === 'string' ? currentCode : ''
+      if (safeCurrent && safeCurrent.length > CODE_CHAR_BUDGET) {
+        safeCurrent = truncateMiddle(safeCurrent, CODE_CHAR_BUDGET)
+      }
+
+      const simpleMsg: Msg[] = [
+        { role: 'system', content: sysPromptSimple() },
+        {
+          role: 'user',
+          content:
+            (lastAssistant ? `LAST_ANSWER:\n${lastAssistant}\n\n` : '') +
+            (safeCurrent ? `CURRENT_CODE:\n${safeCurrent}\n\n` : '') +
+            `USER_REQUEST:\n${prompt}`,
+        },
+      ]
+      const simpleRaw = await openai(simpleMsg, 900, 0.1, 30000, isLikelyJson)
+      logSpecDebug('simpleRaw', simpleRaw)
+      const simple = safeParseJson(simpleRaw)
+      if (simple && (simple.type === 'questions' || simple.type === 'code')) {
+        if (simple.type === 'questions') {
+          return NextResponse.json({
+            type: 'questions',
+            assistant_text: typeof simple.assistant_text === 'string' ? simple.assistant_text : 'I need a bit more info.',
+            spec: incomingSpec,
+            questions: Array.isArray(simple.questions) ? simple.questions.slice(0, 3) : [],
+            actions: ['simple_questions'],
+          } satisfies ApiResp)
+        }
+        if (simple.type === 'code' && typeof simple.code === 'string') {
+          const code = sanitizeOpenSCAD(simple.code)
+          return NextResponse.json({
+            type: 'code',
+            assistant_text: typeof simple.assistant_text === 'string' ? simple.assistant_text : 'Updated the model.',
+            spec: incomingSpec,
+            code,
+            actions: ['simple_code'],
+          } satisfies ApiResp)
+        }
+      }
+    } catch (e: any) {
+      console.warn(SPEC_DEBUG_PREFIX, 'simple path failed, falling back', { error: e?.message })
+    }
+
+    // 1) merge spec 
     const lastAssistant = [...shortHistory].reverse().find(m => m.role === 'assistant')?.content || ''
   const uiFaceHint =
       selection?.faceIndex != null
