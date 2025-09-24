@@ -31,22 +31,28 @@ function isLikelyJson(text: string) {
   return trimmed.startsWith('{') || trimmed.startsWith('[')
 }
 
+function isLikelyCode(text: string) {
+  const t = (text || '').trim()
+  if (!t) return false
+  // Quick signals of OpenSCAD-like code
+  if (/\b(module|union|difference|intersection|cube\s*\(|cylinder\s*\(|polyhedron\s*\()/.test(t)) return true
+  if (/;\s*$/.test(t)) return true
+  if (/^\s*\$fn\s*=/.test(t)) return true
+  return false
+}
+
 // --------- simplified single-call path (fast path) ---------
 function sysPromptSimple() {
   return `
 You are an OpenSCAD assistant.
 
 Task:
-- If the user provided enough info (dimensions, counts, positions) to build a reasonable first model, return code.
-- If not, ask up to 3 short, specific questions to gather the missing dimensions.
+ - If the user provided enough info (dimensions, counts, positions) to build a reasonable first model, return ONLY OpenSCAD code (no markdown/fences, no '$fn').
+ - If not, ask up to 3 short, specific questions to gather the missing dimensions, as STRICT JSON only:
+   {"type":"questions","assistant_text": string, "questions": string[]}
 
-Output format (STRICT JSON only):
-{"type":"questions","assistant_text": string, "questions": string[]} OR
-{"type":"code","assistant_text": string, "code": string}
-
-When type == "code":
-- Return ONLY valid OpenSCAD in the code field (no markdown, no fences, no '$fn').
-- Include a small parameter block at the top using simple snake_case variables.
+Code requirements:
+- Include a small parameter block at the top using snake_case variables.
 - Ensure at least one solid primitive and a single top-level union()/difference().
 - If CURRENT_CODE is provided, modify it minimally and preserve positions/transforms.
 `.trim()
@@ -769,29 +775,43 @@ export async function POST(req: NextRequest) {
             `USER_REQUEST:\n${prompt}`,
         },
       ]
-      const simpleRaw = await openai(simpleMsg, 700, 0.1, 25000, isLikelyJson, { json: true })
+      const simpleRaw = await openai(simpleMsg, 600, 0.05, 20000, undefined /* validator */, undefined /* no forced JSON */)
       logSpecDebug('simpleRaw', simpleRaw)
-      const simple = safeParseJson(simpleRaw)
-      if (simple && (simple.type === 'questions' || simple.type === 'code')) {
-        if (simple.type === 'questions') {
-          return NextResponse.json({
-            type: 'questions',
-            assistant_text: typeof simple.assistant_text === 'string' ? simple.assistant_text : 'I need a bit more info.',
-            spec: incomingSpec,
-            questions: Array.isArray(simple.questions) ? simple.questions.slice(0, 3) : [],
-            actions: ['simple_questions'],
-          } satisfies ApiResp)
+      // Try structured path first
+      try {
+        const simple = safeParseJson(simpleRaw)
+        if (simple && (simple.type === 'questions' || simple.type === 'code')) {
+          if (simple.type === 'questions') {
+            return NextResponse.json({
+              type: 'questions',
+              assistant_text: typeof simple.assistant_text === 'string' ? simple.assistant_text : 'I need a bit more info.',
+              spec: incomingSpec,
+              questions: Array.isArray(simple.questions) ? simple.questions.slice(0, 3) : [],
+              actions: ['simple_questions'],
+            } satisfies ApiResp)
+          }
+          if (simple.type === 'code' && typeof simple.code === 'string') {
+            const code = sanitizeOpenSCAD(simple.code)
+            return NextResponse.json({
+              type: 'code',
+              assistant_text: typeof simple.assistant_text === 'string' ? simple.assistant_text : 'Updated the model.',
+              spec: incomingSpec,
+              code,
+              actions: ['simple_code'],
+            } satisfies ApiResp)
+          }
         }
-        if (simple.type === 'code' && typeof simple.code === 'string') {
-          const code = sanitizeOpenSCAD(simple.code)
-          return NextResponse.json({
-            type: 'code',
-            assistant_text: typeof simple.assistant_text === 'string' ? simple.assistant_text : 'Updated the model.',
-            spec: incomingSpec,
-            code,
-            actions: ['simple_code'],
-          } satisfies ApiResp)
-        }
+      } catch {}
+      // If not JSON but looks like raw code, accept it directly
+      if (isLikelyCode(simpleRaw)) {
+        const code = sanitizeOpenSCAD(simpleRaw)
+        return NextResponse.json({
+          type: 'code',
+          assistant_text: 'Generated code with defaults.',
+          spec: incomingSpec,
+          code,
+          actions: ['simple_code_raw'],
+        } satisfies ApiResp)
       }
     } catch (e: any) {
       const msg = String(e?.message || '')
