@@ -229,6 +229,8 @@ export async function getOpenAIText({
             model: resolvedModel,
             input: toResponseInput(messages),
             max_output_tokens: tokens,
+            // Let the server trim input if we exceed the model's context window
+            truncation: 'auto' as any,
           },
           { signal: controller.signal }
         )

@@ -6,6 +6,12 @@ export const maxDuration = 60
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
 
+// Soft character budgets to keep inputs within model context limits.
+// These are conservative approximations (tokens ~ chars/4 for English; code varies).
+// You can tune via env if needed.
+const SPEC_CHAR_BUDGET = Number(process.env.SPEC_CHAR_BUDGET || '') || 60000
+const CODE_CHAR_BUDGET = Number(process.env.CODE_CHAR_BUDGET || '') || 50000
+
 type Msg = ChatMessage
 
 const SPEC_DEBUG_PREFIX = '[SpecDebug]'
@@ -23,6 +29,21 @@ function isLikelyJson(text: string) {
   const trimmed = text.trim()
   if (!trimmed) return false
   return trimmed.startsWith('{') || trimmed.startsWith('[')
+}
+
+// Truncate long text by keeping head and tail with a marker, to preserve
+// important headers and endings (useful for code and pretty-printed JSON).
+function truncateMiddle(text: string, maxChars: number): string {
+  if (!text || text.length <= maxChars) return text
+  const keep = Math.max(0, maxChars - 80) // reserve room for marker
+  const head = Math.ceil(keep * 0.6)
+  const tail = keep - head
+  const omitted = text.length - (head + tail)
+  return (
+    text.slice(0, head) +
+    `\n/* … [TRUNCATED ${omitted} chars for length] … */\n` +
+    text.slice(text.length - tail)
+  )
 }
 
 
@@ -693,25 +714,31 @@ export async function POST(req: NextRequest) {
         : 'UI_SELECTED_FACE: none'
     const uiFeatureHint = selection?.featureId ? `UI_SELECTED_FEATURE: ${selection.featureId}` : 'UI_SELECTED_FEATURE: none'
 
-    const mergeMsg: Msg[] = [
-      { role: 'system', content: sysPromptSpecMerge() },
-      {
-        role: 'user',
-        content:
-          `EXISTING_SPEC:\n` +
-          JSON.stringify(incomingSpec || {}, null, 2) +
-          `\n\nLAST_ASSISTANT_TEXT:\n` +
-          lastAssistant +
-          `\n\n${uiFaceHint}` +
-          `\n${uiFeatureHint}` +
-          (selection ? `\n\nSELECTION:\n${JSON.stringify(selection, null, 2)}` : '') +
-          `\n\nHISTORY_SNIPPET:\n` +
-          JSON.stringify(shortHistory, null, 2) +
-          `\n\nACCEPT_DEFAULTS: ${acceptDefaults ? 'true' : 'false'}` +
-          `\n\nUSER_REQUEST:\n` +
-          prompt,
-      },
-    ]
+    // Stringify and cap the existing spec to avoid blowing past context limits
+    let existingSpecJson = JSON.stringify(incomingSpec || {}, null, 2)
+    if (existingSpecJson.length > SPEC_CHAR_BUDGET) {
+      existingSpecJson = truncateMiddle(existingSpecJson, SPEC_CHAR_BUDGET)
+    }
+
+    const mergeMsg: Msg[] = [ 
+      { role: 'system', content: sysPromptSpecMerge() }, 
+      { 
+        role: 'user', 
+        content: 
+          `EXISTING_SPEC:\n` + 
+          existingSpecJson + 
+          `\n\nLAST_ASSISTANT_TEXT:\n` + 
+          lastAssistant + 
+          `\n\n${uiFaceHint}` + 
+          `\n${uiFeatureHint}` + 
+          (selection ? `\n\nSELECTION:\n${JSON.stringify(selection, null, 2)}` : '') + 
+          `\n\nHISTORY_SNIPPET:\n` + 
+          JSON.stringify(shortHistory, null, 2) + 
+          `\n\nACCEPT_DEFAULTS: ${acceptDefaults ? 'true' : 'false'}` + 
+          `\n\nUSER_REQUEST:\n` + 
+          prompt, 
+      }, 
+    ] 
     const mergedRaw = await openai(mergeMsg, 900, 0.1, 45000, isLikelyJson)
     logSpecDebug('mergedRaw', mergedRaw)
 
@@ -852,16 +879,28 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
     }
 
   // 2) codegen
-  const codeMsg: Msg[] = [
-    { role: 'system', content: sysPromptCode() },
-    {
-      role: 'user',
-      content:
-          (selection ? `SELECTION:\n${JSON.stringify(selection, null, 2)}\n\n` : '') +
-          (currentCode ? `CURRENT_CODE (modify minimally, preserve positions):\n${currentCode}\n\n` : '') +
-          `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}`,
-    },
-  ]
+  // Prepare capped CURRENT_CODE and SPEC strings for the codegen step
+  let safeCurrentCode = currentCode && typeof currentCode === 'string' ? String(currentCode) : ''
+  if (safeCurrentCode && safeCurrentCode.length > CODE_CHAR_BUDGET) {
+    safeCurrentCode = truncateMiddle(safeCurrentCode, CODE_CHAR_BUDGET)
+  }
+  let mergedSpecJson = JSON.stringify(mergedSpec, null, 2)
+  if (mergedSpecJson.length > SPEC_CHAR_BUDGET) {
+    mergedSpecJson = truncateMiddle(mergedSpecJson, SPEC_CHAR_BUDGET)
+  }
+
+  const codeMsg: Msg[] = [ 
+    { role: 'system', content: sysPromptCode() }, 
+    { 
+      role: 'user', 
+      content: 
+          (selection ? `SELECTION:\n${JSON.stringify(selection, null, 2)}\n\n` : '') + 
+          (safeCurrentCode
+            ? `CURRENT_CODE (may be truncated for length; modify minimally and preserve positions):\n${safeCurrentCode}\n\n`
+            : '') + 
+          `SPEC:\n${mergedSpecJson}`, 
+    }, 
+  ] 
   const codeRaw = await openai(codeMsg, 1800, 0.1)
   logSpecDebug('codeRaw', codeRaw)
 
