@@ -190,38 +190,36 @@ export async function getOpenAIText({
   const resolvedModel = model || DEFAULT_MODEL
   const controller = new AbortController()
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+  const startedAt = Date.now()
+  const deadline = timeoutMs && timeoutMs > 0 ? startedAt + timeoutMs : 0
 
-  const refreshTimeout = () => {
-    if (!timeoutMs || timeoutMs <= 0) {
+  const armTimeout = () => {
+    if (!deadline) return
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      try { controller.abort() } catch {}
       return
     }
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle)
-    }
-    timeoutHandle = setTimeout(() => controller.abort(), timeoutMs)
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    timeoutHandle = setTimeout(() => controller.abort(), Math.max(1, remaining))
   }
 
   try {
     if (resolvedModel.toLowerCase().startsWith('gpt-5')) {
-      const firstTokens = Math.min(
-        MAX_OUTPUT_CAP,
-        Math.max(
-          maxOutputTokens ?? 1200,
-          (maxOutputTokens ? Math.floor(maxOutputTokens * 1.5) : 1500)
-        )
-      )
+      // Keep the first attempt at the requested budget to reduce latency; second at cap if needed.
+      const firstTokens = Math.min(MAX_OUTPUT_CAP, maxOutputTokens ?? 1200)
       const tokenAttempts = [firstTokens]
-      // If we didn't already reach the hard cap, plan a second attempt at the cap
-      if (firstTokens < MAX_OUTPUT_CAP) {
-        tokenAttempts.push(MAX_OUTPUT_CAP)
-      }
+      if (firstTokens < MAX_OUTPUT_CAP) tokenAttempts.push(MAX_OUTPUT_CAP)
 
       let lastResponse: any = null
       let lastReason: string | undefined
       let fallbackText: string | null = null
 
       for (const [index, tokens] of tokenAttempts.entries()) {
-        refreshTimeout()
+        armTimeout()
+        if (deadline && Date.now() >= deadline) {
+          throw new Error('OpenAI request timed out')
+        }
 
         console.debug(DEBUG_PREFIX, 'responses.create attempt', {
           model: resolvedModel,
