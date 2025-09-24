@@ -211,6 +211,10 @@ export async function getOpenAIText({
         )
       )
       const tokenAttempts = [firstTokens]
+      // If we didn't already reach the hard cap, plan a second attempt at the cap
+      if (firstTokens < MAX_OUTPUT_CAP) {
+        tokenAttempts.push(MAX_OUTPUT_CAP)
+      }
 
       let lastResponse: any = null
       let lastReason: string | undefined
