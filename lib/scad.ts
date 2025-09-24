@@ -151,6 +151,30 @@ export function sanitizeOpenSCAD(rawish: string) {
   raw = fixStrayBracesInCalls(raw)
   // Ensure 2D primitives are extruded when used in 3D CSG
   raw = ensure2DExtruded(raw)
+
+  // Remove trailing non-code stray tokens (e.g., accidental words like "medium")
+  try {
+    const lines = raw.split('\n')
+    const codeHead = /^(module|function)\b/i
+    const callHead = /^(translate|rotate|scale|mirror|offset|union|difference|intersection|hull|minkowski|cube|sphere|cylinder|square|circle|polygon|polyhedron|linear_extrude|rotate_extrude)\s*\(/i
+    const assignLine = /^\s*[A-Za-z_]\w*\s*=\s*[^;]+;\s*$/
+    const closing = /^[}\]]\s*;?\s*$/
+    const endsSemicolon = /;\s*$/
+    const isCodey = (t: string) => {
+      if (t === '') return false
+      if (t.startsWith('//')) return true
+      if (closing.test(t)) return true
+      if (endsSemicolon.test(t)) return true
+      if (codeHead.test(t)) return true
+      if (callHead.test(t)) return true
+      if (assignLine.test(t)) return true
+      return false
+    }
+    while (lines.length > 0 && !isCodey(lines[lines.length - 1].trim())) {
+      lines.pop()
+    }
+    raw = lines.join('\n')
+  } catch {}
   // Ensure a top-level call if exactly one module is declared
   try {
     const modRe = /^\s*module\s+([A-Za-z_]\w*)\s*\(/gim
