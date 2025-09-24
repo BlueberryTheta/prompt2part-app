@@ -247,7 +247,8 @@ async function openai(
   max_tokens = 1200,
   temperature = 0.2,
   timeoutMs = 45000,
-  validate?: (text: string) => boolean
+  validate?: (text: string) => boolean,
+  opts?: { json?: boolean }
 ) {
   const isGpt5 = OPENAI_MODEL.toLowerCase().startsWith('gpt-5')
   return getOpenAIText({
@@ -257,6 +258,7 @@ async function openai(
     temperature: isGpt5 ? undefined : temperature,
     timeoutMs,
     validate,
+    responseFormatJson: !!opts?.json,
   })
 }
 
@@ -767,7 +769,7 @@ export async function POST(req: NextRequest) {
             `USER_REQUEST:\n${prompt}`,
         },
       ]
-      const simpleRaw = await openai(simpleMsg, 900, 0.1, 30000, isLikelyJson)
+      const simpleRaw = await openai(simpleMsg, 700, 0.1, 25000, isLikelyJson, { json: true })
       logSpecDebug('simpleRaw', simpleRaw)
       const simple = safeParseJson(simpleRaw)
       if (simple && (simple.type === 'questions' || simple.type === 'code')) {
@@ -792,7 +794,12 @@ export async function POST(req: NextRequest) {
         }
       }
     } catch (e: any) {
-      console.warn(SPEC_DEBUG_PREFIX, 'simple path failed, falling back', { error: e?.message })
+      const msg = String(e?.message || '')
+      console.warn(SPEC_DEBUG_PREFIX, 'simple path failed', { error: msg })
+      if (msg.toLowerCase().includes('timed out')) {
+        return NextResponse.json({ error: 'OpenAI request timed out' }, { status: 504 })
+      }
+      // else: fall through to full flow
     }
 
     // 1) merge spec 
@@ -830,7 +837,7 @@ export async function POST(req: NextRequest) {
           prompt, 
       }, 
     ] 
-    const mergedRaw = await openai(mergeMsg, 900, 0.1, 45000, isLikelyJson)
+    const mergedRaw = await openai(mergeMsg, 700, 0.1, 35000, isLikelyJson, { json: true }) 
     logSpecDebug('mergedRaw', mergedRaw)
 
     let mergedSpec: Spec = incomingSpec
@@ -925,7 +932,7 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
           { role: 'system', content: `You are a UI schema generator. Return STRICT JSON with keys: { "objectType": string, "params": object, "adjustables": Array, "ask": string[], "options": object }. Include ONLY the parameters the user should edit now for the current object. Use dot-paths for nested keys (e.g., position.x). Do not invent irrelevant defaults. Keep adjustables concise and relevant.` },
           { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}\n\nIf applicable, base the objectType on the main feature or part_type.` },
         ]
-        const schemaRaw = await openai(schemaMsg, 700, 0.2, 45000, isLikelyJson)
+        const schemaRaw = await openai(schemaMsg, 500, 0.2, 20000, isLikelyJson, { json: true }) 
         logSpecDebug('schemaRaw', schemaRaw)
         const schema = safeParseJson(schemaRaw)
         objectType = schema.objectType || objectType
@@ -992,7 +999,7 @@ function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Sp
           `SPEC:\n${mergedSpecJson}`, 
     }, 
   ] 
-  const codeRaw = await openai(codeMsg, 1800, 0.1)
+  const codeRaw = await openai(codeMsg, 1300, 0.1) 
   logSpecDebug('codeRaw', codeRaw)
 
   // Sanitize & heal code

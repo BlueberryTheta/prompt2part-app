@@ -178,6 +178,7 @@ export async function getOpenAIText({
   temperature,
   timeoutMs = 20000,
   validate,
+  responseFormatJson,
 }: {
   messages: ChatMessage[]
   model?: string
@@ -185,6 +186,7 @@ export async function getOpenAIText({
   temperature?: number
   timeoutMs?: number
   validate?: (text: string) => boolean
+  responseFormatJson?: boolean
 }): Promise<string> {
   const client = ensureClient()
   const resolvedModel = model || DEFAULT_MODEL
@@ -220,20 +222,32 @@ export async function getOpenAIText({
         if (deadline && Date.now() >= deadline) {
           throw new Error('OpenAI request timed out')
         }
+        // If this is not the first attempt, ensure we have enough time left to be useful
+        if (index > 0 && deadline) {
+          const remaining = deadline - Date.now()
+          if (remaining < 8000) {
+            console.warn(DEBUG_PREFIX, 'skipping retry due to low remaining time', { remainingMs: remaining })
+            break
+          }
+        }
 
         console.debug(DEBUG_PREFIX, 'responses.create attempt', {
           model: resolvedModel,
           max_output_tokens: tokens,
         })
 
+        const payload: any = {
+          model: resolvedModel,
+          input: toResponseInput(messages),
+          max_output_tokens: tokens,
+          // Let the server trim input if we exceed the model's context window
+          truncation: 'auto' as any,
+        }
+        if (responseFormatJson) {
+          ;(payload as any).response_format = { type: 'json_object' }
+        }
         const response = await client.responses.create(
-          {
-            model: resolvedModel,
-            input: toResponseInput(messages),
-            max_output_tokens: tokens,
-            // Let the server trim input if we exceed the model's context window
-            truncation: 'auto' as any,
-          },
+          payload,
           { signal: controller.signal }
         )
 
@@ -311,6 +325,7 @@ export async function getOpenAIText({
         messages: messages.map(({ role, content }) => ({ role, content })),
         max_tokens: maxOutputTokens,
         ...(typeof temperature === 'number' ? { temperature } : {}),
+        ...(responseFormatJson ? { response_format: { type: 'json_object' } as any } : {}),
       },
       { signal: controller.signal }
     )
