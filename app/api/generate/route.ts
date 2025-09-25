@@ -825,7 +825,7 @@ export async function POST(req: NextRequest) {
             `USER_REQUEST:\n${prompt}`,
         },
       ]
-      const simpleRaw = await openai(simpleMsg, 600, 0.05, 20000, undefined /* validator */, undefined /* no forced JSON */)
+      const simpleRaw = await openai(simpleMsg, 900, 0.1, 25000, isLikelyJson, { json: true })
       logSpecDebug('simpleRaw', simpleRaw)
       // Try structured path first
       try {
@@ -857,12 +857,14 @@ export async function POST(req: NextRequest) {
         const code = sanitizeOpenSCAD(simpleRaw)
         return NextResponse.json({
           type: 'code',
-          assistant_text: 'Generated code with defaults.',
+          assistant_text: 'Generated code.',
           spec: incomingSpec,
           code,
           actions: ['simple_code_raw'],
         } satisfies ApiResp)
       }
+      // Minimal mode: if we reach here, do not attempt complex merge/codegen.
+      return NextResponse.json({ error: 'Could not interpret AI output' }, { status: 502 })
     } catch (e: any) {
       const msg = String(e?.message || '')
       console.warn(SPEC_DEBUG_PREFIX, 'simple path failed', { error: msg })
