@@ -1,6 +1,7 @@
 // app/api/generate/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { ChatMessage, getOpenAIText } from '@/lib/openai'
+import { sanitizeOpenSCAD as baseSanitizeOpenSCAD } from '@/lib/scad'
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
@@ -371,70 +372,8 @@ function fixBrokenEmptyCalls(code: string) {
   return out
 }
 
-function sanitizeOpenSCAD(rawish: string) { 
-  let raw = (rawish || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').trim(); 
-
-  // Strip fences if present
-  const m = raw.match(/```(?:openscad|scad)?\s*([\s\S]*?)```/i);
-  if (m) raw = m[1].trim();
-
-  // Remove any $fn the model set; client controls tessellation
-  raw = raw.replace(/^\s*\$fn\s*=\s*[^;]+;\s*/gmi, '');
-
-  // Convert "name = cube(...);" into a safe module call
-  raw = fixGeometryAssignments(raw);
-
-  // Heal common syntax glitches (e.g. "center=true} )")
-  raw = fixCommonSyntaxScad(raw);
-
-  // ðŸ”§ NEW: heal missing semicolons before '}' and at EOF
-  raw = fixMissingSemicolonsNearBraces(raw);
-
-  // Fix broken or empty call endings
-  raw = fixBrokenEmptyCalls(raw);
-
-  // Remove stray closing braces that leaked into function call argument lists
-  raw = fixStrayBracesInCalls(raw);
-
-  // Ensure 2D primitives are extruded into 3D when used in 3D CSG 
-  raw = ensure2DExtruded(raw); 
-
-  // Strip trailing non-code tokens (e.g., accidental words like "medium")
-  try {
-    const lines = raw.split('\n')
-    const codeHead = /^(module|function)\b/i
-    const callHead = /^(translate|rotate|scale|mirror|offset|union|difference|intersection|hull|minkowski|cube|sphere|cylinder|square|circle|polygon|polyhedron|linear_extrude|rotate_extrude)\s*\(/i
-    const assignLine = /^\s*[A-Za-z_]\w*\s*=\s*[^;]+;\s*$/
-    const closing = /^[}\]]\s*;?\s*$/
-    const endsSemicolon = /;\s*$/
-    const isCodey = (t: string) => {
-      if (t === '') return false
-      if (t.startsWith('//')) return true
-      if (closing.test(t)) return true
-      if (endsSemicolon.test(t)) return true
-      if (codeHead.test(t)) return true
-      if (callHead.test(t)) return true
-      if (assignLine.test(t)) return true
-      return false
-    }
-    while (lines.length > 0 && !isCodey(lines[lines.length - 1].trim())) {
-      lines.pop()
-    }
-    raw = lines.join('\n')
-  } catch {}
-
-  // Ensure a top-level call if exactly one module is declared
-  try {
-    const modRe = /^\s*module\s+([A-Za-z_]\w*)\s*\(/gim
-    const mods = Array.from(raw.matchAll(modRe)).map(m => m[1])
-    if (mods.length === 1) {
-      const name = mods[0]
-      const hasCall = new RegExp(String.raw`(^|\W)${name}\s*\(`).test(raw.replace(modRe, ''))
-      if (!hasCall) raw = raw + `\n${name}();\n`
-    }
-  } catch {}
-
-  return raw;
+function sanitizeOpenSCAD(rawish: string) {
+  return baseSanitizeOpenSCAD(rawish)
 }
 
 // Remove sequences like "} } )" or "} )" that accidentally appear inside argument lists
