@@ -286,7 +286,7 @@ Additionally, you MUST return an AI-driven Quick Setup schema with ONLY the para
 - options: optional map of enumerated choices per key.
 
 Output STRICT JSON:
-{"spec": <merged spec>, "assumptions": string[], "questions": string[], "objectType": string, "params": object, "adjustables": Array, "ask": string[], "options": object}`.trim()
+{"spec": <merged spec>, "assumptions": string[], "questions": string[]}`.trim()
 }
 
 function sysPromptCode() {
@@ -889,7 +889,7 @@ export async function POST(req: NextRequest) {
           `\n\nUSER_REQUEST:\n` + String(prompt ?? ''), 
       }, 
     ] 
-    const mergedRaw = await openai(mergeMsg, 700, 0.1, 25000, isLikelyJson, { json: true }) 
+    const mergedRaw = await openai(mergeMsg, 900, 0.05, 30000, isLikelyJson, { json: true }) 
     logSpecDebug('mergedRaw', mergedRaw)
 
     let mergedSpec: Spec = incomingSpec
