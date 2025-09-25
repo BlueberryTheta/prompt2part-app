@@ -9,8 +9,12 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5'
 // Soft character budgets to keep inputs within model context limits.
 // These are conservative approximations (tokens ~ chars/4 for English; code varies).
 // You can tune via env if needed.
-const SPEC_CHAR_BUDGET = Number(process.env.SPEC_CHAR_BUDGET || '') || 60000
-const CODE_CHAR_BUDGET = Number(process.env.CODE_CHAR_BUDGET || '') || 50000
+// Aggressive default budgets; can be tuned via env
+const SPEC_CHAR_BUDGET = Number(process.env.SPEC_CHAR_BUDGET || '') || 20000
+const CODE_CHAR_BUDGET = Number(process.env.CODE_CHAR_BUDGET || '') || 30000
+
+// Feature flag: disable legacy multi-phase flow (merge/schema/codegen)
+const DISABLE_LEGACY_FLOW = (process.env.DISABLE_LEGACY_FLOW ?? '1') === '1'
 
 type Msg = ChatMessage
 
@@ -261,56 +265,9 @@ type ApiResp =
   | { error: string }
 
 // ---------- prompts ----------
-function sysPromptSpecMerge() {
-  return `
-You are a CAD spec editor. Merge the new user request into the existing SPEC.
+// legacy sysPromptSpecMerge removed
 
-Goals:
-- Infer intent and set spec.part_type when obvious (e.g., "cable holder", "phone stand", "L-bracket").
-- Gather only the minimum information to produce a reasonable first model.
-
-Rules:
-- Keep units consistent. Default "mm".
-- Do not change existing geometry unless explicitly requested.
-- Resolve ellipsis/pronouns using LAST_ASSISTANT_TEXT and UI_SELECTED_FACE (e.g. "center" applies to that face).
-- Do not force additive vs subtractive operations; infer from the user's intent. If ambiguous and ACCEPT_DEFAULTS is false, ask briefly; if ACCEPT_DEFAULTS is true, choose reasonable defaults and proceed.
-- If required info is missing, add "missing" and ask up to 3 short, pointed "questions" with sensible defaults in parentheses, UNLESS ACCEPT_DEFAULTS is true.
-- Prefer concrete numbers. Suggest typical ranges where helpful.
-- NEVER output code here.
-
-Include highlightable metadata for each feature you create or edit:
-- If placed relative to a face, include base_face/face as a string like "G11" (case-insensitive OK).
-- If a 3D point is known (from UI selection), include position.point: [x, y, z]. If you know a center, include position.center.
-- Do not invent coordinates; only include values you can infer from the request or selection.
-
-If UI_SELECTED_FEATURE is present, apply the change to that feature.
-For holders/brackets/clamps/enclosures/knobs/adapters, choose 2Ã¢â‚¬â€œ3 key questions with defaults; otherwise proceed with reasonable assumptions.
-
-Positioning requirements:
-- For every NEW feature you create (cube, cylinder, hole, slot, etc.), ask the user for the desired position (center point in mm) unless it is obvious from context.
-- Record positions in SPEC under position.center: [x, y, z] (numbers, mm). If the feature references a face, position the center on that face unless the user requests offsets.
-- When the user accepts defaults, set a reasonable default (e.g., [0,0,0] or centered on the referenced face) and proceed.
-
-Additionally, you MUST return an AI-driven Quick Setup schema with ONLY the parameters that matter now:
-- objectType: normalized short type for the current object (e.g., "cube", "cylinder", "cable_holder").
-- params: a flat map of current parameter values used by the geometry (numbers/strings/booleans or nested objects).
-- adjustables: an array of fields the user may edit NOW, each with: { key, type, label?, unit?, min?, max?, step?, options? }.
-  - key uses dot-paths for nested (e.g., "position.x").
-  - Include ONLY fields the user should edit now; do NOT include irrelevant defaults.
-- ask: optional short questions for ambiguous/missing values, <= 3.
-- options: optional map of enumerated choices per key.
-
-Output STRICT JSON:
-{"spec": <merged spec>, "assumptions": string[], "questions": string[]}`.trim()
-}
-
-function sysPromptCode() {
-  return `
-You are an OpenSCAD generator. Return ONLY OpenSCAD code (no markdown, no $fn).
-- Start with a small parameter block (snake_case numbers) for key dimensions.
-- Ensure at least one solid primitive and a single top-level union() or difference().
-- If CURRENT_CODE is provided, modify it minimally and preserve positions/transforms.`.trim()
-}
+// legacy sysPromptCode removed; using sysPromptCodeOnly
 
 // ---------- openai (with timeout) ----------
 async function openai(
@@ -353,208 +310,10 @@ function safeParseJson(jsonish: string) {
 }
 
 
-function hasPrimitive(code: string) {
-  // Require at least one solid-creating primitive, not just CSG/transform keywords
-  return /\b(cube|cylinder|sphere|polyhedron|square\s*\(|circle\s*\(|polygon\s*\(|linear_extrude\s*\(|rotate_extrude\s*\()/.test(code)
-}
-
-// Attempt to synthesize minimal OpenSCAD from SPEC if code lacks geometry
-function synthesizeFromSpec(spec: Spec | undefined): string | null {
-  if (!spec) return null
-  const feats: any[] = Array.isArray((spec as any).features) ? ((spec as any).features as any[]) : []
-  if (feats.length === 0) return null
-  const parts: string[] = []
-  for (const f of feats) {
-    const t = String(f?.type || '').toLowerCase()
-    if (t === 'cube') {
-      const s = Number(f?.side_length ?? f?.dimensions?.side_length)
-      const w = Number(f?.dimensions?.width ?? s)
-      const h = Number(f?.dimensions?.height ?? s)
-      const d = Number(f?.dimensions?.depth ?? s)
-      const hasBox = Number.isFinite(w) && Number.isFinite(h) && Number.isFinite(d)
-      if (Number.isFinite(s)) parts.push(`cube([${s}, ${s}, ${s}], center=false);`)
-      else if (hasBox) parts.push(`cube([${w}, ${h}, ${d}], center=false);`)
-    } else if (t === 'cylinder') {
-      const dia = Number(f?.diameter ?? (Number(f?.radius) ? Number(f?.radius) * 2 : undefined) ?? f?.dimensions?.diameter)
-      const h = Number(f?.height ?? f?.dimensions?.height)
-      if (Number.isFinite(dia) && Number.isFinite(h)) parts.push(`cylinder(d=${dia}, h=${h}, center=false);`)
-    }
-  }
-  if (parts.length === 0) return null
-  return `// Synthesized from SPEC\nunion(){\n  ${parts.join('\n  ')}\n}`
-}
-
-// Convert "name = cube(...);" into "module name(){ cube(...); } name();"
-function fixGeometryAssignments(scad: string) {
-  const geomHeads =
-    '(?:translate|rotate|scale|mirror|union|difference|intersection|hull|minkowski|cube|sphere|cylinder|polyhedron|linear_extrude|rotate_extrude)'
-  const assignRe = new RegExp(String.raw`^(\s*)([A-Za-z_]\w*)\s*=\s*(${geomHeads})\s*\(`, 'mig')
-  const converted = new Set<string>()
-  let out = scad
-  out = out.replace(assignRe, (_m, indent: string, name: string, head: string) => {
-    converted.add(name)
-    return `${indent}module ${name}() { ${head}(`
-  })
-  out = out.replace(/(\)\s*;)/g, '} $1')
-  if (converted.size > 0) {
-    const namesAlt = Array.from(converted).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
-    const bareUseRe = new RegExp(String.raw`(^|\W)(${namesAlt})\s*;`, 'g')
-    out = out.replace(bareUseRe, (_m, pre: string, nm: string) => `${pre}${nm}();`)
-  }
-  return out
-}
-
 function toGFace(s?: string) {
   if (!s || typeof s !== 'string') return s
   const m = s.match(/^[gG](\d+)$/)
   return m ? `G${m[1]}` : s
-}
-
-function normalizeFacesInSpec(spec: Spec): Spec {
-  const out: Spec = JSON.parse(JSON.stringify(spec || {}))
-  if (!Array.isArray(out.features)) return out
-  for (const f of out.features as any[]) {
-    if (!f.feature_id && f.id) f.feature_id = f.id
-    if (f.base_face) f.base_face = toGFace(f.base_face)
-    if (f.face) f.face = toGFace(f.face)
-    if (f.position?.reference_face) f.position.reference_face = toGFace(f.position.reference_face)
-    if (f.position?.face) f.position.face = toGFace(f.position.face)
-  }
-  return out
-}
-
-function ensureFeatureIds(spec: Spec): Spec {
-  const out: Spec = JSON.parse(JSON.stringify(spec || {}))
-  const feats: any[] = Array.isArray(out.features) ? out.features : []
-  let seq = 1
-  for (const f of feats) {
-    if (!f.feature_id) {
-      const t = String(f?.type || 'feature').toLowerCase()
-      f.feature_id = `${t}-${seq++}-${Math.random().toString(36).slice(2, 6)}`
-    }
-  }
-  out.features = feats
-  return out
-}
-
-// Default cylinder-on-face -> boss
-// Note: previously we defaulted cylinders-on-face to 'boss'.
-// This was removed to let the model infer user intent (boss vs cut).
-
-// If model used `spec.geometry` instead of `spec.features`, fold it into features for the client.
-function normalizeGeometryToFeatures(spec: Spec): Spec {
-  if (!spec) return spec
-  const anySpec: any = spec as any
-  const geomAny = anySpec.geometry
-  if (!geomAny) return spec
-
-  const out: Spec = JSON.parse(JSON.stringify(spec))
-  const feats: any[] = [...(out.features || [])]
-
-  const pushFromGeom = (g: any) => {
-    const t = String(g?.type || '').toLowerCase()
-    if (t === 'cube') {
-      feats.push({
-        type: 'cube',
-        side_length: g?.side_length ?? g?.dimensions?.side_length ?? g?.width ?? g?.height ?? g?.depth,
-        dimensions: g?.dimensions,
-        position: g?.position,
-      } as any)
-    } else if (t === 'cylinder') {
-      feats.push({
-        type: 'cylinder',
-        diameter: g?.diameter ?? g?.dimensions?.diameter ?? (g?.radius ? g.radius * 2 : undefined),
-        radius: g?.radius ?? g?.dimensions?.radius,
-        height: g?.height ?? g?.dimensions?.height,
-        position: g?.position,
-        base_face: g?.base_face ?? g?.face,
-        operation: g?.operation,
-      } as any)
-    } else {
-      // pass-through for other or unknown types
-      feats.push(g)
-    }
-  }
-
-  if (Array.isArray(geomAny)) {
-    for (const g of geomAny) pushFromGeom(g)
-  } else if (geomAny && typeof geomAny === 'object') {
-    for (const key of Object.keys(geomAny)) {
-      const g = (geomAny as any)[key]
-      if (g && typeof g === 'object') pushFromGeom(g)
-    }
-  }
-
-  ;(out as any).features = feats
-  delete (out as any).geometry
-  return out
-}
-
-// Fallback: derive a minimal feature list from sanitized OpenSCAD code
-function deriveFeaturesFromCode(code: string): any[] {
-  const feats: any[] = []
-  const src = (code || '').replace(/\r\n/g, '\n')
-  const add = (t: string) => feats.push({ type: t, feature_id: `${t}-${feats.length + 1}` })
-  try {
-    // Count first few primitives as coarse features
-    const cubeRe = /\bcube\s*\(/gi
-    const cylRe = /\bcylinder\s*\(/gi
-    let m: RegExpExecArray | null
-    let count = 0
-    while ((m = cubeRe.exec(src)) && count < 5) { add('cube'); count++ }
-    count = 0
-    while ((m = cylRe.exec(src)) && count < 5) { add('cylinder'); count++ }
-  } catch {}
-  return feats
-}
-
-// Do we have any subtractive features in the spec?
-function hasCutFeatures(spec: Spec): boolean {
-  const feats = spec.features || []
-  return feats.some((f: any) => {
-    const t = String(f?.type || '').toLowerCase()
-    if (t === 'hole' || t === 'slot') return true
-    if (t === 'cylinder' && String(f?.operation || '').toLowerCase() === 'cut') return true
-    return false
-  })
-}
-
-// If the model emitted `difference(){ union(){...} SUBTRACT; }` but spec has no cuts,
-// rewrite to `union(){ ... ; SUBTRACT; }` so additive-only edits still render.
-function rewriteDifferenceIfNoCuts(code: string, spec: Spec): string {
-  if (hasCutFeatures(spec)) return code
-
-  // 1) If the entire code is wrapped in a single outer difference(), rewrite just that block
-  const outerDiff = code.match(/^\s*difference\s*\{\s*([\s\S]+)\s*\}\s*;?\s*$/i)
-  if (outerDiff) {
-    const inner = outerDiff[1]
-    const unionMatch = inner.match(/\bunion\s*\{\s*([\s\S]*?)\s*\}/i)
-    if (unionMatch) {
-      const unionBody = unionMatch[1].trim()
-      const afterUnion = inner.slice(inner.indexOf(unionMatch[0]) + unionMatch[0].length).trim()
-      const extras = afterUnion.replace(/^\s*;?/, '').replace(/\s*;?\s*$/, '')
-      const rebuilt = `union(){\n${unionBody}\n${extras ? '\n' + extras + '\n' : ''}}`
-      return rebuilt
-    }
-  }
-
-  // 2) Heuristic: if spec has no cut features, but code still contains inner difference() blocks
-  // that subtract add-on primitives (e.g., cylinders for bosses), convert those inner differences
-  // to union() unless they appear to be hollowing (look for wall_thickness hint).
-  // This is a best-effort stability pass to avoid accidental holes.
-  const hasHollowHints = /wall_thickness|hollow/i.test(code)
-  if (!hasHollowHints) {
-    return code.replace(/\bdifference\s*\{/gi, 'union{')
-  }
-  return code
-}
-
-// Detect internal-only boss pattern
-function obviouslyInternalBoss(code: string) {
-  const hasUnion = /\bunion\s*\(/i.test(code)
-  const centeredCyl = /\bcylinder\s*\([^)]*center\s*=\s*true/i.test(code)
-  const noCenterFalse = !/\bcylinder\s*\([^)]*center\s*=\s*false/i.test(code)
-  return hasUnion && centeredCyl && noCenterFalse
 }
 
 // -------- NEW: fix common OpenSCAD syntax glitches from the model ----------
@@ -602,50 +361,6 @@ function fixMissingSemicolonsNearBraces(code: string) {
 }
 
 // Build a minimal, data-driven adjustable set from the current spec (no registry, no defaults)
-function buildAdjustablesFromSpec(spec: Spec, featureId?: string): {
-  objectType?: string
-  adjustables: Adjustable[]
-  params: Record<string, any>
-} {
-  const outParams: Record<string, any> = {}
-  const adjustables: Adjustable[] = []
-  if (!spec) return { objectType: undefined, adjustables, params: outParams }
-
-  // Helper to flatten numeric fields into dot-keys
-  const flattenNumeric = (obj: any, base = '') => {
-    if (!obj || typeof obj !== 'object') return
-    for (const k of Object.keys(obj)) {
-      const v = (obj as any)[k]
-      const path = base ? `${base}.${k}` : k
-      if (typeof v === 'number' && Number.isFinite(v)) {
-        outParams[path] = v
-      } else if (v && typeof v === 'object') {
-        flattenNumeric(v, path)
-      }
-    }
-  }
-
-  // Prefer the most recently added feature (last), else first
-  const feats = Array.isArray(spec.features) ? spec.features : []
-  let feature: any = null
-  if (featureId) {
-    feature = feats.find((f: any) => (f?.feature_id || f?.id) === featureId) || null
-  }
-  if (!feature) {
-    feature = feats.length > 0 ? feats[feats.length - 1] : null
-  }
-  if (feature) flattenNumeric(feature)
-  // Also include overall dimensions if present
-  if (spec.overall) flattenNumeric(spec.overall, 'overall')
-
-  for (const key of Object.keys(outParams)) {
-    adjustables.push({ key, type: 'number', label: key })
-  }
-
-  const objectType = (feature?.type as string) || spec.part_type
-  return { objectType, adjustables, params: outParams }
-}
-
 // Heal broken empty/stray call endings like: name(} ); or name()}
 function fixBrokenEmptyCalls(code: string) {
   let out = code
@@ -853,6 +568,19 @@ export async function POST(req: NextRequest) {
             },
           ]
 
+      // Basic input size logging for observability
+      console.debug(
+        SPEC_DEBUG_PREFIX,
+        'simple_call_input_sizes',
+        {
+          promptLen: String(prompt ?? '').length,
+          currentCodeLen: safeCurrent.length,
+          wantsDefaults,
+          maxTokens: wantsDefaults ? 1200 : 900,
+          timeoutMs: wantsDefaults ? 28000 : 25000,
+        }
+      )
+
       const simpleRaw = wantsDefaults
         ? await openai(simpleMsg, 1200, 0.05, 28000, isLikelyJson, { json: true })
         : await openai(simpleMsg, 900, 0.1, 25000, isLikelyJson, { json: true })
@@ -902,247 +630,21 @@ export async function POST(req: NextRequest) {
       if (msg.toLowerCase().includes('timed out')) {
         return NextResponse.json({ error: 'OpenAI request timed out' }, { status: 504 })
       }
-      // else: fall through to full flow
+      // else: do not fall back to legacy flow
+      return NextResponse.json({ error: 'AI request failed' }, { status: 502 })
     }
 
-    // 1) merge spec 
+    // Legacy flow is disabled by default to avoid timeouts
+    if (DISABLE_LEGACY_FLOW) {
+      return NextResponse.json({ error: 'Legacy flow disabled' }, { status: 501 })
+    }
     // Stringify and cap the existing spec to avoid blowing past context limits
     let existingSpecJson = JSON.stringify(incomingSpec || {}, null, 2)
     if (existingSpecJson.length > SPEC_CHAR_BUDGET) {
       existingSpecJson = truncateMiddle(existingSpecJson, SPEC_CHAR_BUDGET)
     }
 
-    const mergeMsg: Msg[] = [ 
-      { role: 'system', content: sysPromptSpecMerge() }, 
-      { 
-        role: 'user', 
-        content: 
-          `EXISTING_SPEC:\n` + existingSpecJson + 
-          `\n\nACCEPT_DEFAULTS: ${acceptDefaults ? 'true' : 'false'}` + 
-          `\n\nUSER_REQUEST:\n` + String(prompt ?? ''), 
-      }, 
-    ] 
-    const mergedRaw = await openai(mergeMsg, 900, 0.05, 30000, isLikelyJson, { json: true }) 
-    logSpecDebug('mergedRaw', mergedRaw)
-
-    let mergedSpec: Spec = incomingSpec
-    let assumptions: string[] = []
-    let missing: string[] = []
-    let questions: string[] = []
-    let objectType: string | undefined
-    let adjustables: any[] | undefined
-    let adjustParams: Record<string, any> | undefined
-    let adjustAsk: string[] | undefined
-    let adjustOptions: Record<string, string[]> | undefined
-    try {
-      const parsed = safeParseJson(mergedRaw)
-      mergedSpec = mergeSpecsPreserve(incomingSpec, parsed.spec)
-      assumptions = parsed.assumptions || []
-      missing = parsed.missing || []
-      questions = parsed.questions || []
-      objectType = parsed.objectType || parsed.part_type || undefined
-      adjustables = Array.isArray(parsed.adjustables) ? parsed.adjustables : undefined
-      adjustParams = parsed.params || undefined
-      adjustAsk = Array.isArray(parsed.ask) ? parsed.ask : undefined
-      adjustOptions = parsed.options || undefined
-    } catch (e: any) {
-      console.error(SPEC_DEBUG_PREFIX, 'Spec merge parse error', { error: e?.message, preview: previewText(mergedRaw) })
-      logSpecDebug('mergedRaw_parse_error', mergedRaw)
-      return NextResponse.json({ error: 'Spec merge failed: invalid JSON' } as ApiResp, { status: 500 })
-    }
-
-// Non-destructive merge: preserve existing features; overlay updates by feature_id/id; append new ones.
-function mergeSpecsPreserve(base: Spec | undefined, patch: Spec | undefined): Spec {
-  const out: Spec = JSON.parse(JSON.stringify(base || {}))
-  if (!patch) return out
-  const patchNorm = normalizeGeometryToFeatures(patch)
-
-  // Scalar fields
-  if (patchNorm.units) out.units = patchNorm.units
-  if (patchNorm.part_type) out.part_type = patchNorm.part_type
-  if (patchNorm.overall) out.overall = { ...(out.overall || {}), ...patchNorm.overall }
-  if (patchNorm.tolerances) out.tolerances = { ...(out.tolerances || {}), ...patchNorm.tolerances }
-  if (patchNorm.notes) out.notes = patchNorm.notes
-
-  const baseFeats: any[] = Array.isArray((out as any).features) ? ((out as any).features as any[]) : []
-  const patchFeats: any[] = Array.isArray((patchNorm as any).features) ? ((patchNorm as any).features as any[]) : []
-  if (patchFeats.length > 0) {
-    const idOf = (f: any, idx: number) => f?.feature_id || f?.id || `__idx_${idx}`
-    const indexById = new Map<string, number>()
-    baseFeats.forEach((f, i) => indexById.set(idOf(f, i), i))
-    for (let j = 0; j < patchFeats.length; j++) {
-      const pf = patchFeats[j]
-      const key = idOf(pf, j)
-      if (indexById.has(key)) {
-        const i = indexById.get(key)!
-        baseFeats[i] = { ...baseFeats[i], ...pf }
-      } else {
-        baseFeats.push(pf)
-      }
-    }
-    ;(out as any).features = baseFeats
-  }
-  return out
-}
-
-    // Normalize face casing & geometry->features and assign feature ids
-    mergedSpec = normalizeGeometryToFeatures(mergedSpec)
-    mergedSpec = normalizeFacesInSpec(mergedSpec)
-    mergedSpec = ensureFeatureIds(mergedSpec)
-
-    // Persist UI selection (face/point) as highlightable metadata on the selected feature when available
-    try {
-      if (selection && (selection as any).featureId) {
-        const fid = (selection as any).featureId as string
-        const feats: any[] = Array.isArray((mergedSpec as any).features) ? ((mergedSpec as any).features as any[]) : []
-        const f = feats.find((x: any) => (x?.feature_id || x?.id) === fid)
-        if (f) {
-          if (selection.faceIndex != null) {
-            const g = `G${selection.faceIndex}`
-            if (!f.base_face) f.base_face = g
-            if (!f.face) f.face = g
-            f.position = { ...(f.position || {}), face: g }
-          }
-          if (Array.isArray(selection.point) && selection.point.length === 3) {
-            f.position = { ...(f.position || {}), point: selection.point }
-          }
-        }
-      }
-    } catch {}
-
-    // If the model did not provide adjustables, ask it for a minimal adaptive schema now (AI-only, no defaults)
-    if (!adjustables || adjustables.length === 0) {
-      try {
-        const schemaMsg: Msg[] = [
-          { role: 'system', content: `You are a UI schema generator. Return STRICT JSON with keys: { "objectType": string, "params": object, "adjustables": Array, "ask": string[], "options": object }. Include ONLY the parameters the user should edit now for the current object. Use dot-paths for nested keys (e.g., position.x). Do not invent irrelevant defaults. Keep adjustables concise and relevant.` },
-          { role: 'user', content: `SPEC:\n${JSON.stringify(mergedSpec, null, 2)}\n\nIf applicable, base the objectType on the main feature or part_type.` },
-        ]
-        const schemaRaw = await openai(schemaMsg, 500, 0.2, 20000, isLikelyJson, { json: true }) 
-        logSpecDebug('schemaRaw', schemaRaw)
-        const schema = safeParseJson(schemaRaw)
-        objectType = schema.objectType || objectType
-        adjustables = Array.isArray(schema.adjustables) ? schema.adjustables : adjustables
-        adjustParams = schema.params || adjustParams
-        adjustAsk = Array.isArray(schema.ask) ? schema.ask : adjustAsk
-        adjustOptions = schema.options || adjustOptions
-      } catch {}
-    }
-
-    // Final safety: if still no adjustables, derive directly from the current spec (no registry, purely data-driven)
-    if (!adjustables || adjustables.length === 0) {
-      const derived = buildAdjustablesFromSpec(mergedSpec, selection?.featureId)
-      objectType = objectType || derived.objectType
-      adjustables = derived.adjustables
-      adjustParams = derived.params
-    }
-
-    // Ask if still unclear
-    if (missing.length > 0 || questions.length > 0) {
-      const msg = [
-        assumptions.length ? `Assumptions applied:\n- ${assumptions.join('\n- ')}` : null,
-        missing.length ? `I still need:\n- ${missing.join('\n- ')}` : null,
-        questions.length ? `Questions:\n- ${questions.join('\n- ')}` : null,
-      ]
-        .filter(Boolean)
-        .join('\n\n')
-
-      return NextResponse.json({
-        type: 'questions',
-        assistant_text: msg || 'I need a bit more info.',
-        spec: mergedSpec,
-        assumptions,
-        questions,
-        objectType,
-        adjustables,
-        adjust_params: adjustParams,
-        options: adjustOptions,
-        ask: adjustAsk,
-        actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults'],
-      } satisfies ApiResp)
-    }
-
-  // 2) codegen
-  // Prepare capped CURRENT_CODE and SPEC strings for the codegen step
-  let safeCurrentCode = currentCode && typeof currentCode === 'string' ? String(currentCode) : ''
-  if (safeCurrentCode && safeCurrentCode.length > CODE_CHAR_BUDGET) {
-    safeCurrentCode = truncateMiddle(safeCurrentCode, CODE_CHAR_BUDGET)
-  }
-  let mergedSpecJson = JSON.stringify(mergedSpec, null, 2)
-  if (mergedSpecJson.length > SPEC_CHAR_BUDGET) {
-    mergedSpecJson = truncateMiddle(mergedSpecJson, SPEC_CHAR_BUDGET)
-  }
-
-  const codeMsg: Msg[] = [ 
-    { role: 'system', content: sysPromptCode() }, 
-    { 
-      role: 'user', 
-      content: 
-          (selection ? `SELECTION:\n${JSON.stringify(selection, null, 2)}\n\n` : '') + 
-          (safeCurrentCode
-            ? `CURRENT_CODE (may be truncated for length; modify minimally and preserve positions):\n${safeCurrentCode}\n\n`
-            : '') + 
-          `SPEC:\n${mergedSpecJson}`, 
-    }, 
-  ] 
-  const codeRaw = await openai(codeMsg, 1300, 0.1) 
-  logSpecDebug('codeRaw', codeRaw)
-
-  // Sanitize & heal code
-  let code = sanitizeOpenSCAD(codeRaw)
-  // If no cuts requested but model used difference(), turn into union()
-  code = rewriteDifferenceIfNoCuts(code, mergedSpec)
-
-    // Ensure feature list is populated even if the model omitted it
-    if (!Array.isArray((mergedSpec as any).features) || ((mergedSpec as any).features as any[]).length === 0) {
-      try {
-        const derived = deriveFeaturesFromCode(code)
-        if (derived.length > 0) (mergedSpec as any).features = derived
-      } catch {}
-    }
-
-  if (!hasPrimitive(code)) {
-    // Try to synthesize code from SPEC to avoid empty scene
-    const fallback = synthesizeFromSpec(mergedSpec)
-    if (fallback) {
-      code = fallback
-    } else {
-      return NextResponse.json({
-        type: 'questions',
-        assistant_text: 'I still need a bit more info before I can safely generate code.',
-        spec: mergedSpec,
-        questions: ['Please clarify missing geometry details.'],
-        actions: ['merged_spec', 'code_check_failed'],
-      } satisfies ApiResp)
-    }
-  }
-
-    if (obviouslyInternalBoss(code)) {
-      return NextResponse.json({
-        type: 'questions',
-        assistant_text:
-          'The cylinder appears to be centered inside the cube (no outward boss). Should it be a **boss** that sticks **out of the referenced face**, or a **hole** cut into the body?',
-        spec: mergedSpec,
-        questions: ['Boss or hole for this cylinder on the face? (default: boss)'],
-        actions: ['merged_spec', 'guard_internal_boss'],
-      } satisfies ApiResp)
-    }
-
-    return NextResponse.json({
-      type: 'code',
-      assistant_text: assumptions.length
-        ? `Updated the model. I applied:\n- ${assumptions.join('\n- ')}`
-        : 'Updated the model.',
-      spec: mergedSpec,
-      assumptions,
-      code,
-      objectType,
-      adjustables,
-      adjust_params: adjustParams,
-      options: adjustOptions,
-      ask: adjustAsk,
-      actions: ['merged_spec', assumptions.length ? 'applied_defaults' : 'no_defaults', 'generated_code'],
-    } satisfies ApiResp)
-  } catch (err: any) {
+    } catch (err: any) {
     console.error('ðŸ›‘ /api/generate fatal error:', err?.message || err)
     return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 })
   }
