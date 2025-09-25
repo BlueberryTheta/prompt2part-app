@@ -88,6 +88,7 @@ function collectResponseText(payload: any): string {
     /^resp_[A-Za-z0-9]+$/,
     /^run_[A-Za-z0-9]+$/,
     /^gpt-[\w-]+$/,
+    /^(?:low|medium|high|none)$/i,
   ]
 
   const shouldSkip = (value: string, key?: string) => {
@@ -225,7 +226,7 @@ export async function getOpenAIText({
         // If this is not the first attempt, ensure we have enough time left to be useful
         if (index > 0 && deadline) {
           const remaining = deadline - Date.now()
-          if (remaining < 8000) {
+          if (remaining < 3000) {
             console.warn(DEBUG_PREFIX, 'skipping retry due to low remaining time', { remainingMs: remaining })
             break
           }

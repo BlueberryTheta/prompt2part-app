@@ -854,13 +854,24 @@ export async function POST(req: NextRequest) {
           ]
 
       const simpleRaw = wantsDefaults
-        ? await openai(simpleMsg, 800, 0.05, 20000)
-        : await openai(simpleMsg, 800, 0.1, 22000, isLikelyJson, { json: true })
+        ? await openai(simpleMsg, 1200, 0.05, 28000, isLikelyJson, { json: true })
+        : await openai(simpleMsg, 900, 0.1, 25000, isLikelyJson, { json: true })
       logSpecDebug('simpleRaw', simpleRaw)
       // Try structured path first
       try {
         const simple = safeParseJson(simpleRaw)
-        if (simple && (simple.type === 'questions' || simple.type === 'code')) {
+        // Defaults path: expect a minimal JSON with just { code } or { type, code/questions }
+        if (simple && typeof simple === 'object') {
+          if (typeof simple.code === 'string' && simple.code.trim().length > 0) {
+            const code = sanitizeOpenSCAD(simple.code)
+            return NextResponse.json({
+              type: 'code',
+              assistant_text: wantsDefaults ? 'Generated code using defaults.' : (typeof simple.assistant_text === 'string' ? simple.assistant_text : 'Generated code.'),
+              spec: incomingSpec,
+              code,
+              actions: ['simple_code'],
+            } satisfies ApiResp)
+          }
           if (simple.type === 'questions') {
             return NextResponse.json({
               type: 'questions',
@@ -868,16 +879,6 @@ export async function POST(req: NextRequest) {
               spec: incomingSpec,
               questions: Array.isArray(simple.questions) ? simple.questions.slice(0, 3) : [],
               actions: ['simple_questions'],
-            } satisfies ApiResp)
-          }
-          if (simple.type === 'code' && typeof simple.code === 'string') {
-            const code = sanitizeOpenSCAD(simple.code)
-            return NextResponse.json({
-              type: 'code',
-              assistant_text: typeof simple.assistant_text === 'string' ? simple.assistant_text : 'Updated the model.',
-              spec: incomingSpec,
-              code,
-              actions: ['simple_code'],
             } satisfies ApiResp)
           }
         }
