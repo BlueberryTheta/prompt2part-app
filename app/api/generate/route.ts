@@ -121,6 +121,21 @@ Code requirements:
 `.trim()
 }
 
+// Even simpler: when defaults are accepted, produce code now without asking questions.
+function sysPromptCodeOnly() {
+  return `
+You are an OpenSCAD assistant. Produce ONLY valid OpenSCAD code now.
+
+Rules:
+- No markdown/fences. Do not include $fn.
+- If information is missing, choose reasonable defaults and proceed; do NOT ask questions.
+- Start with a small parameter block (snake_case numbers) for key dimensions.
+- Use millimeters when units are unspecified or set to mm.
+- Ensure at least one solid primitive and a single top-level union() or difference().
+- If CURRENT_CODE is provided, modify it minimally and preserve positions/transforms.
+`.trim()
+}
+
 // Truncate long text by keeping head and tail with a marker, to preserve
 // important headers and endings (useful for code and pretty-printed JSON).
 function truncateMiddle(text: string, maxChars: number): string {
@@ -815,17 +830,32 @@ export async function POST(req: NextRequest) {
         safeCurrent = truncateMiddle(safeCurrent, CODE_CHAR_BUDGET)
       }
 
-      const simpleMsg: Msg[] = [
-        { role: 'system', content: sysPromptSimple() },
-        {
-          role: 'user',
-          content:
-            (lastAssistant ? `LAST_ANSWER:\n${lastAssistant}\n\n` : '') +
-            (safeCurrent ? `CURRENT_CODE:\n${safeCurrent}\n\n` : '') +
-            `USER_REQUEST:\n${prompt}`,
-        },
-      ]
-      const simpleRaw = await openai(simpleMsg, 900, 0.1, 25000, isLikelyJson, { json: true })
+      const wantsDefaults = !!acceptDefaults || /default/i.test(String(prompt || ''))
+      const simpleMsg: Msg[] = wantsDefaults
+        ? [
+            { role: 'system', content: sysPromptCodeOnly() },
+            {
+              role: 'user',
+              content:
+                (safeCurrent ? `CURRENT_CODE:\n${safeCurrent}\n\n` : '') +
+                `UNITS: ${(incomingSpec?.units || 'mm').toString()}` +
+                `\n\nUSER_REQUEST:\n${prompt}`,
+            },
+          ]
+        : [
+            { role: 'system', content: sysPromptSimple() },
+            {
+              role: 'user',
+              content:
+                (lastAssistant ? `LAST_ANSWER:\n${lastAssistant}\n\n` : '') +
+                (safeCurrent ? `CURRENT_CODE:\n${safeCurrent}\n\n` : '') +
+                `USER_REQUEST:\n${prompt}`,
+            },
+          ]
+
+      const simpleRaw = wantsDefaults
+        ? await openai(simpleMsg, 800, 0.05, 20000)
+        : await openai(simpleMsg, 800, 0.1, 22000, isLikelyJson, { json: true })
       logSpecDebug('simpleRaw', simpleRaw)
       // Try structured path first
       try {
@@ -857,7 +887,7 @@ export async function POST(req: NextRequest) {
         const code = sanitizeOpenSCAD(simpleRaw)
         return NextResponse.json({
           type: 'code',
-          assistant_text: 'Generated code.',
+          assistant_text: wantsDefaults ? 'Generated code using defaults.' : 'Generated code.',
           spec: incomingSpec,
           code,
           actions: ['simple_code_raw'],
